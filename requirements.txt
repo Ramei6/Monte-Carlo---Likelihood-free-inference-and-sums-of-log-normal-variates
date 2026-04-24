@@ -1,0 +1,8 @@
+numpy>=1.24
+scipy>=1.10
+jax>=0.4.25
+jaxlib>=0.4.25
+pandas>=2.0
+matplotlib>=3.7
+seaborn>=0.12
+tqdm>=4.65
