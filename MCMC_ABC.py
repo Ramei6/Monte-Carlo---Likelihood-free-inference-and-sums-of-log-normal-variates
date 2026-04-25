@@ -4,7 +4,6 @@ MCMC-ABC (Marjoram et al., 2003)
 
 import jax
 import jax.numpy as jnp
-from jax import random, lax, vmap
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -152,41 +151,26 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
     def body_fun(i, state):
         samples, theta_curr, key, n_accepted = state
 
-        # Split de la clé en 3 sous-clés : proposition, simulation, acceptation
-        key, key_prop, key_sim, key_acc = random.split(key, 4)
+        # Split de la clé en 3 subkeys : proposition, simulation, acceptation
+        key, key_prop, key_sim, key_acc = jax.random.split(key, 4)
 
-        # F1 : proposition
+        # Proposition
         theta_new = propose(key_prop, theta_curr)
 
-        # F2 : simulation
+        # Simulation
         y_sim = simulate(key_sim, theta_new, m_sim, l)
 
-        # F3' : porte de distance
-        # ── TON CODE ICI (partie 1) ───────────────────────────────────────────
-        # Calcule d = wasserstein1(y_obs_sorted, y_sim)
-        # within_eps = (d <= epsilon)   — type booléen JAX
-        raise NotImplementedError("BLOC D partie 1 — distance gate")
-        # ─────────────────────────────────────────────────────────────────────
+        # Calcul de la distance
+        d = wasserstein1(y_obs_sorted, y_sim)
 
-        # F4 : log ratio MH (proposal symétrique → q s'annule)
-        # ── TON CODE ICI (partie 2) ───────────────────────────────────────────
-        # log_h = log_prior(theta_new) - log_prior(theta_curr)
-        raise NotImplementedError("BLOC D partie 2 — log ratio MH")
-        # ─────────────────────────────────────────────────────────────────────
+        # Acceptation ou rejet
+        eps_accept = (d <= epsilon)
+        log_h = log_prior(theta_new) - log_prior(theta_curr)
+        log_u = jnp.log(jax.random.uniform(key_acc))
+        theta_curr = jnp.where(eps_accept, theta_new, theta_curr)
+        n_accepted = n_accepted + jnp.where(eps_accept, 1, 0)
 
-        # F5 : acceptation combinée (distance ET MH)
-        # ── TON CODE ICI (partie 3) ───────────────────────────────────────────
-        # log_u = jnp.log(random.uniform(key_acc))
-        # accept = within_eps & (log_u < log_h)
-        # theta_curr = jnp.where(accept, theta_new, theta_curr)
-        #   ATTENTION : theta est un array (2,), donc jnp.where(accept, ?, ?)
-        #   doit être broadcasté — utilise jnp.where(accept, theta_new, theta_curr)
-        #   directement (JAX le gère pour les arrays de même shape)
-        # n_accepted = n_accepted + jnp.where(accept, 1, 0)
-        raise NotImplementedError("BLOC D partie 3 — acceptation")
-        # ─────────────────────────────────────────────────────────────────────
-
-        # Enregistrement (toujours, même si rejeté — règle de Marjoram !)
+        # On garde en mémoire (toujours, même si rejeté. cf. Marjoram)
         samples = samples.at[i].set(theta_curr)
 
         return samples, theta_curr, key, n_accepted
@@ -194,14 +178,12 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
     def mcmc_abc_single(key, theta0, n_total=N_BURN + N_ITER):
         """
         Lance une chaîne MCMC-ABC de longueur n_total depuis theta0.
-
-        Signature compatible avec vmap : seul `key` est batché.
         """
         samples  = jnp.zeros((n_total, 2))
         samples  = samples.at[0].set(theta0)
         n_acc    = jnp.array(0)
 
-        samples, _, _, n_acc = lax.fori_loop(
+        samples, _, _, n_acc = jax.lax.fori_loop(
             1, n_total, body_fun,
             (samples, theta0, key, n_acc)
         )
@@ -212,8 +194,7 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
     return mcmc_abc_single
 
 
-# ─── Initialisation valide (theta0 dans la boule epsilon) ────────────────────
-
+# FONCTION TEMPO: petit ABC à l'avenir
 def find_valid_init(key, y_obs_sorted, epsilon, n_tries=5_000,
                     s=S_PRIOR, t=T_PRIOR):
     """
@@ -222,10 +203,10 @@ def find_valid_init(key, y_obs_sorted, epsilon, n_tries=5_000,
     Inspiré de find_init dans le guide mcmc_abc du cours.
     """
     for _ in range(n_tries):
-        key, k1, k2, k3 = random.split(key, 4)
+        key, k1, k2, k3 = jax.random.split(key, 4)
         # Tirage depuis le prior
-        mu_try    = s * random.normal(k1)
-        log_s2_try = t * random.normal(k2)
+        mu_try    = s * jax.random.normal(k1)
+        log_s2_try = t * jax.random.normal(k2)
         sigma_try = jnp.exp(0.5 * log_s2_try)
         theta_try = jnp.array([mu_try, sigma_try])
         # Simulation et distance
@@ -235,7 +216,6 @@ def find_valid_init(key, y_obs_sorted, epsilon, n_tries=5_000,
             return theta_try, key
     raise RuntimeError(
         f"Aucun theta valide trouvé en {n_tries} essais. "
-        "Augmente epsilon ou élargis le prior."
     )
 
 
@@ -268,14 +248,16 @@ def run_all_chains(mcmc_abc_single, key, theta0, n_chains=N_CHAINS,
         chains_post : array (n_chains, n_iter, 2) — après burn-in
         acc_rates   : array (n_chains,) — taux d'acceptation par chaîne
     """
-    # ── TON CODE ICI ──────────────────────────────────────────────────────────
-    # 1. Crée n_chains clés avec random.split
-    # 2. Vmappe mcmc_abc_single sur l'axe 0 des clés seulement
-    # 3. Lance sur (keys, theta0, n_burn + n_iter)
-    # 4. Découpe le burn-in : chains_post = all_samples[:, n_burn:, :]
-    # 5. Retourne chains_post, all_acc_rates
-    raise NotImplementedError("BLOC E — À compléter")
-    # ─────────────────────────────────────────────────────────────────────────
+    subkeys = jax.random.split(key, n_chains)
+
+    # vmap uniquement sur les keys, pas les autres params.
+    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axis=(0, None, None))
+    # Lancer toutes les chaînes en parallèle
+    all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0, n_burn + n_iter)
+
+    chains_post = all_samples[:, n_burn:, :]   # shape (n_chains, n_iter, 2)
+
+    return chains_post, all_acc_rates
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
