@@ -141,7 +141,7 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
         log_u = jnp.log(jax.random.uniform(key_acc))
         accept = eps_accept & (log_h > log_u)
         theta_curr = jnp.where(accept, theta_new, theta_curr)
-        n_accepted = n_accepted + jnp.where(eps_accept, 1, 0)
+        n_accepted = n_accepted + jnp.where(accept, 1, 0)
 
         # On garde en mémoire (toujours, même si rejeté. cf. Marjoram)
         samples = samples.at[i].set(theta_curr)
@@ -384,14 +384,28 @@ if __name__ == "__main__":
     for eps in [0.5, 1.0, 1.5, 2.5]:
         print(f"  ε = {eps}...")
 
-        # ── TON CODE ICI ──────────────────────────────────────────────────────
-        # Pour chaque epsilon :
-        #   1. Construis make_mcmc_abc(Y_OBS_sorted, eps)
-        #   2. Lance run_all_chains
-        #   3. Thinne et mets à plat les résultats
-        #   4. Stocke dans results_by_eps[eps] = (flat_mu, flat_sigma)
-        pass
-        # ─────────────────────────────────────────────────────────────────────
+        mcmc_fn = make_mcmc_abc(Y_OBS_sorted, eps)
+
+        # Recherche d'un theta0
+        key_run, key_init = jax.random.split(key_run)
+        theta0_eps, _ = find_valid_init(key_init, Y_OBS_sorted, eps)
+
+        # Lancement des chaines
+        key_run, key_chains = jax.random.split(key_run)
+        chains_eps, acc_eps = run_all_chains(mcmc_fn, key_chains, theta0_eps)
+        print(f"     Taux d'acceptation moyen : {float(jnp.mean(acc_eps)):.3f}")
+
+        # Thinning
+        chains_thin = chains_eps[:, ::K_THIN, :]
+
+        # Chaque chaine produit N_ITER observations de la posterior distribution.
+        # Sous condition que chaque chaine ait convergé, par indépendance on regroupe tout
+        # et la distribution posterior estimée contient N_CHAINS * N_ITER obs.
+        flat_mu    = np.array(chains_thin[:, :, 0]).ravel()
+        flat_sigma = np.array(chains_thin[:, :, 1]).ravel()
+
+        # Sauvegarde
+        results_by_eps[eps] = (flat_mu, flat_sigma)
 
     if results_by_eps:
         plot_sensitivity_epsilon(results_by_eps)
