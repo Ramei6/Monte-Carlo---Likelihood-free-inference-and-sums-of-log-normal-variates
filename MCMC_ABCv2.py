@@ -21,14 +21,13 @@ S_PRIOR = 1.0
 T_PRIOR = 1.0
 
 # Chaîne MCMC
-N_CHAINS  = 8       # nombre de chaînes parallèles (vmappées)
-N_BURN    = 4_000   # longueur du burn-in
-N_ITER    = 20_000  # longueur post-burn-in
+N_CHAINS  = 4       # nombre de chaînes parallèles (vmappées)
+N_BURN    = 3_000   # longueur du burn-in
+N_ITER    = 15_000  # longueur post-burn-in
 K_THIN    = 80       # facteur de thinning pour les diagnostics
 
-EPSILON   = 0.1     # tolérance ABC (à calibrer via pilot run)
-DELTA_MU      = 0.10   # std de la marche aléatoire sur mu
-DELTA_LOG_SIG = 0.10   # std de la marche aléatoire sur log(sigma)
+EPSILON   = 1     # tolérance ABC (à calibrer via pilot run)
+DELTA      = 0.25   # std de la marche aléatoire sur mu et log(sigma)
 
 # ─── 0. Génération des données "observées" ───────────────────────────────────
 
@@ -94,20 +93,20 @@ def simulate(key, theta, m_sim=M_SIM, l=L):
 # ─── Proposition (marche aléatoire sur (mu, log sigma)) ──────────────────────
 # cf. make_proposal dans le RWMH du cours.
 
-def propose(key, theta, delta_mu=DELTA_MU, delta_log_sig=DELTA_LOG_SIG):
+def propose(key, theta, delta=DELTA):
     """
     Propose theta' par marche aléatoire gaussienne sur (mu, log sigma).
     Proposal symétrique donc le ratio q s'annule dans h.
     """
     mu, sigma = theta[0], theta[1]
     key_mu, key_sig = jax.random.split(key)
-    mu_new       = mu + delta_mu * jax.random.normal(key_mu)
-    log_sig_new  = jnp.log(sigma) + delta_log_sig * jax.random.normal(key_sig)
+    mu_new       = mu + delta * jax.random.normal(key_mu)
+    log_sig_new  = jnp.log(sigma) + delta * jax.random.normal(key_sig)
     sigma_new    = jnp.exp(log_sig_new)
     return jnp.array([mu_new, sigma_new])
 
 
-def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
+def make_mcmc_abc(y_obs_sorted, epsilon, delta, m_sim=M_SIM, l=L):
     """
     Factory (comme make_rwmh dans le cours) qui retourne la fonction
     de chaîne unique mcmc_abc_single.
@@ -121,13 +120,13 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
     """
 
     def body_fun(i, state):
-        samples, theta_curr, key, n_accepted = state
+        samples, theta_curr, key, n_accepted, epsilon, delta = state
 
         # Split de la clé en 3 subkeys : proposition, simulation, acceptation
         key, key_prop, key_sim, key_acc = jax.random.split(key, 4)
 
         # Proposition
-        theta_new = propose(key_prop, theta_curr)
+        theta_new = propose(key_prop, theta_curr, delta)
 
         # Simulation
         y_sim = simulate(key_sim, theta_new, m_sim, l)
@@ -146,9 +145,9 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
         # On garde en mémoire (toujours, même si rejeté. cf. Marjoram)
         samples = samples.at[i].set(theta_curr)
 
-        return samples, theta_curr, key, n_accepted
+        return samples, theta_curr, key, n_accepted, epsilon, delta
 
-    def mcmc_abc_single(key, theta0, n_total=N_BURN + N_ITER):
+    def mcmc_abc_single(key, theta0, epsilon, delta, n_total=N_BURN + N_ITER):
         """
         Lance une chaîne MCMC-ABC de longueur n_total depuis theta0.
         """
@@ -156,9 +155,9 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
         samples  = samples.at[0].set(theta0)
         n_acc    = jnp.array(0)
 
-        samples, _, _, n_acc = jax.lax.fori_loop(
+        samples, _, _, n_acc, _, _ = jax.lax.fori_loop(
             1, n_total, body_fun,
-            (samples, theta0, key, n_acc)
+            (samples, theta0, key, n_acc, jnp.array(epsilon), jnp.array(delta))
         )
 
         acc_rate = n_acc / (n_total - 1)
@@ -192,7 +191,7 @@ def find_valid_init(key, y_obs_sorted, epsilon, n_tries=10_000,
     )
 
 
-def run_all_chains(mcmc_abc_single, key, theta0, n_chains=N_CHAINS,
+def run_all_chains(mcmc_abc_single, key, theta0, epsilon, delta, n_chains=N_CHAINS,
                    n_burn=N_BURN, n_iter=N_ITER):
     """
     Lance N_CHAINS chaînes en parallèle via vmap.
@@ -204,16 +203,16 @@ def run_all_chains(mcmc_abc_single, key, theta0, n_chains=N_CHAINS,
     subkeys = jax.random.split(key, n_chains)
 
     # vmap uniquement sur les keys, pas les autres params.
-    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axes=(0, None, None))
+    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axes=(0, None, None, None, None))
     # Lancer toutes les chaînes en parallèle
-    all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0, n_burn + n_iter)
+    all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0, epsilon, delta, n_burn + n_iter)
 
     chains_post = all_samples[:, n_burn:, :]   # shape (n_chains, n_iter, 2)
 
     return chains_post, all_acc_rates
 
 
-def compute_acf(x, max_lag=50):
+def compute_acf(x, max_lag=100): # Adapter aussi plot_result()
     """
     Calcule l'ACF empirique de la série x jusqu'au lag max_lag.
 
@@ -272,7 +271,7 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
     # ── 2. ACF ────────────────────────────────────────────────────────────────
     ax_acf_mu  = fig.add_subplot(gs[1, 0])
     ax_acf_sig = fig.add_subplot(gs[1, 1])
-    lags = np.arange(1, 51)
+    lags = np.arange(1, 101)
     for c in range(min(3, n_chains)):
         acf_mu  = np.array(compute_acf(chains_post[c, :, 0]))
         acf_sig = np.array(compute_acf(chains_post[c, :, 1]))
@@ -365,12 +364,12 @@ if __name__ == "__main__":
     print(f"theta0 = (mu={float(theta0[0]):.3f}, sigma={float(theta0[1]):.3f})\n")
 
     # 2. Construction de la chaîne
-    mcmc_abc_single = make_mcmc_abc(Y_OBS_sorted, EPSILON)
+    mcmc_abc_single = make_mcmc_abc(Y_OBS_sorted, EPSILON, DELTA)
 
     # 3. JIT + lancement (le premier appel compile — prend ~30s)
     print("Compilation et lancement des chaînes (vmap + jit)...")
     chains_post, acc_rates = run_all_chains(
-        mcmc_abc_single, key_run, theta0
+        mcmc_abc_single, key_run, theta0, EPSILON, DELTA
     )
     print(f"Taux d'acceptation par chaîne : {np.array(acc_rates)}")
     print(f"Taux moyen : {float(jnp.mean(acc_rates)):.3f}\n")
