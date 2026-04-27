@@ -21,13 +21,13 @@ S_PRIOR = 1.0
 T_PRIOR = 1.0
 
 # Chaîne MCMC
-N_CHAINS  = 4       # nombre de chaînes parallèles (vmappées)
-N_BURN    = 3_000   # longueur du burn-in
-N_ITER    = 15_000  # longueur post-burn-in
-K_THIN    = 80       # facteur de thinning pour les diagnostics
+N_CHAINS  = 5       # nombre de chaînes parallèles (vmappées)
+N_BURN    = 20_000   # longueur du burn-in
+N_ITER    = 100_000  # longueur post-burn-in
+K_THIN    = 100       # facteur de thinning
 
-EPSILON   = 1     # tolérance ABC (à calibrer via pilot run)
-DELTA      = 0.25   # std de la marche aléatoire sur mu et log(sigma)
+EPSILON   = 0.6     # tolérance ABC (à calibrer via pilot run)
+DELTA      = 0.3   # std de la marche aléatoire sur mu et log(sigma)
 
 # ─── 0. Génération des données "observées" ───────────────────────────────────
 
@@ -293,9 +293,10 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
     ]:
         ax.hist(samples, bins=60, density=True, alpha=0.6,
                 color="steelblue", edgecolor="white", linewidth=0.3)
-        q025, q50, q975 = np.percentile(samples, [2.5, 50, 97.5])
+        q025, q975 = np.percentile(samples, [2.5, 97.5])
+        q_mean = np.mean(samples)
         ax.axvline(true,  color="black",  lw=2,   ls="--", label=f"Vraie valeur ({true})")
-        ax.axvline(q50,   color="crimson",lw=1.5,           label=f"Médiane ({q50:.3f})")
+        ax.axvline(q_mean, color="crimson", lw=1.5, label=f"Moyenne ({q_mean:.3f})")
         ax.axvspan(q025, q975, alpha=0.15, color="crimson",
                    label=f"IC 95% [{q025:.3f}, {q975:.3f}]")
         ax.set_title(f"Posterior marginal — {name}  (thinning ×{k_thin})")
@@ -383,7 +384,7 @@ if __name__ == "__main__":
     for eps in [0.5, 1.0, 1.5, 2.5]:
         print(f"  ε = {eps}...")
 
-        mcmc_fn = make_mcmc_abc(Y_OBS_sorted, eps)
+        mcmc_fn = make_mcmc_abc(Y_OBS_sorted, eps, DELTA)
 
         # Recherche d'un theta0
         key_run, key_init = jax.random.split(key_run)
@@ -391,7 +392,7 @@ if __name__ == "__main__":
 
         # Lancement des chaines
         key_run, key_chains = jax.random.split(key_run)
-        chains_eps, acc_eps = run_all_chains(mcmc_fn, key_chains, theta0_eps)
+        chains_eps, acc_eps = run_all_chains(mcmc_fn, key_chains, theta0_eps, eps, DELTA)
         print(f"     Taux d'acceptation moyen : {float(jnp.mean(acc_eps)):.3f}")
 
         # Thinning
