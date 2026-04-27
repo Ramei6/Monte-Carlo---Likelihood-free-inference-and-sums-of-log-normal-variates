@@ -11,8 +11,8 @@ from functools import partial
 
 # ─── Hyperparamètres globaux ──────────────────────────────────────────────────
 L       = 10        # nombre de log-normales par observation
-M_OBS   = 500       # taille du jeu de données observé
-M_SIM   = 500       # taille du jeu simulé à chaque étape MH
+M_OBS   = 1000       # taille du jeu de données observé
+M_SIM   = 1000       # taille du jeu simulé à chaque étape MH
 TRUE_MU    = 0.0    # vraie valeur de mu
 TRUE_SIGMA = 0.3    # vraie valeur de sigma
 
@@ -22,11 +22,11 @@ T_PRIOR = 1.0
 
 # Chaîne MCMC
 N_CHAINS  = 8       # nombre de chaînes parallèles (vmappées)
-N_BURN    = 2_000   # longueur du burn-in
-N_ITER    = 10_000  # longueur post-burn-in
-K_THIN    = 5       # facteur de thinning pour les diagnostics
+N_BURN    = 4_000   # longueur du burn-in
+N_ITER    = 20_000  # longueur post-burn-in
+K_THIN    = 80       # facteur de thinning pour les diagnostics
 
-EPSILON   = 1.5     # tolérance ABC (à calibrer via pilot run)
+EPSILON   = 0.1     # tolérance ABC (à calibrer via pilot run)
 DELTA_MU      = 0.10   # std de la marche aléatoire sur mu
 DELTA_LOG_SIG = 0.10   # std de la marche aléatoire sur log(sigma)
 
@@ -34,11 +34,11 @@ DELTA_LOG_SIG = 0.10   # std de la marche aléatoire sur log(sigma)
 
 def generate_observed_data(key, mu, sigma, m, l):
     """Génère m observations Yi = sum_l exp(Xi,l) avec Xi,l ~ N(mu, sigma^2)."""
-    X = random.normal(key, shape=(m, l))         # shape (m, L)
+    X = jax.random.normal(key, shape=(m, l))         # shape (m, L)
     return jnp.sum(jnp.exp(mu + sigma * X), axis=1)  # shape (m,)
 
-key_master = random.PRNGKey(42)
-key_obs, key_run = random.split(key_master)
+key_master = jax.random.PRNGKey(42)
+key_obs, key_run = jax.random.split(key_master)
 Y_OBS = generate_observed_data(key_obs, TRUE_MU, TRUE_SIGMA, M_OBS, L)
 Y_OBS_sorted = jnp.sort(Y_OBS)   # pré-tri pour W1 efficace
 
@@ -100,40 +100,12 @@ def propose(key, theta, delta_mu=DELTA_MU, delta_log_sig=DELTA_LOG_SIG):
     Proposal symétrique donc le ratio q s'annule dans h.
     """
     mu, sigma = theta[0], theta[1]
-    key_mu, key_sig = random.split(key)
+    key_mu, key_sig = jax.random.split(key)
     mu_new       = mu + delta_mu * jax.random.normal(key_mu)
     log_sig_new  = jnp.log(sigma) + delta_log_sig * jax.random.normal(key_sig)
     sigma_new    = jnp.exp(log_sig_new)
     return jnp.array([mu_new, sigma_new])
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# BLOC D — Corps de la chaîne MCMC-ABC (une itération)  [À COMPLÉTER]
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# C'est le cœur de l'algorithme F de Marjoram et al.
-# Cette fonction sera passée à lax.fori_loop — signature obligatoire :
-#   body_fun(i, state) -> state
-#
-# L'état de la chaîne est un tuple :
-#   state = (samples, theta_curr, key, n_accepted)
-#
-# À chaque itération i :
-#   F1. Proposer theta_new = propose(key_prop, theta_curr)
-#   F2. Simuler Y_sim ~ modèle(theta_new)
-#   F3'. Si W1(Y_obs_sorted, Y_sim) > epsilon → rester, enregistrer theta_curr
-#   F4. log_h = log_prior(theta_new) - log_prior(theta_curr)
-#        (le ratio q s'annule car proposal symétrique)
-#   F5. u ~ Uniform(0,1); si log(u) < log_h → accepter theta_new
-#   Toujours : samples = samples.at[i].set(theta_curr après décision)
-#
-# POINTS CRITIQUES JAX :
-#   - Pas de if/else sur des valeurs JAX → utilise jnp.where(cond, a, b)
-#     pour choisir entre theta_new et theta_curr
-#   - La porte F3' ET la condition MH F5 peuvent être combinées :
-#       accept = within_eps & (log_u < log_h)
-#   - n_accepted doit être mis à jour avec jnp.where aussi
-#   - Utilise arr.at[i].set(val) pour écrire dans samples (immutabilité)
 
 def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
     """
@@ -167,8 +139,9 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
         eps_accept = (d <= epsilon)
         log_h = log_prior(theta_new) - log_prior(theta_curr)
         log_u = jnp.log(jax.random.uniform(key_acc))
-        theta_curr = jnp.where(eps_accept, theta_new, theta_curr)
-        n_accepted = n_accepted + jnp.where(eps_accept, 1, 0)
+        accept = eps_accept & (log_h > log_u)
+        theta_curr = jnp.where(accept, theta_new, theta_curr)
+        n_accepted = n_accepted + jnp.where(accept, 1, 0)
 
         # On garde en mémoire (toujours, même si rejeté. cf. Marjoram)
         samples = samples.at[i].set(theta_curr)
@@ -195,7 +168,7 @@ def make_mcmc_abc(y_obs_sorted, epsilon, m_sim=M_SIM, l=L):
 
 
 # FONCTION TEMPO: petit ABC à l'avenir
-def find_valid_init(key, y_obs_sorted, epsilon, n_tries=5_000,
+def find_valid_init(key, y_obs_sorted, epsilon, n_tries=10_000,
                     s=S_PRIOR, t=T_PRIOR):
     """
     Cherche un theta0 tel que W1(Y_obs, Y_sim(theta0)) <= epsilon.
@@ -219,26 +192,6 @@ def find_valid_init(key, y_obs_sorted, epsilon, n_tries=5_000,
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# BLOC E — Vectorisation sur N_CHAINS avec vmap  [À COMPLÉTER]
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Reproduis exactement le pattern du RWMH du cours :
-#
-#   rwmh_vmap = vmap(rwmh, in_axes=(0, None, None, None))
-#   keys = random.split(PRNGKey(0), n_chains)
-#   samples = rwmh_vmap(keys, x0, n_samples, burnin)
-#
-# Ici :
-#   mcmc_abc_vmap = vmap(mcmc_abc_single, in_axes=(0, None, None))
-#   keys = random.split(key_run, N_CHAINS)
-#   all_samples, all_acc_rates = mcmc_abc_vmap(keys, theta0, N_BURN + N_ITER)
-#
-# IMPORTANT :
-#   - theta0 est le MÊME pour toutes les chaînes (in_axes=None dessus)
-#   - Seules les clés sont différentes (in_axes=0)
-#   - Résultats : all_samples.shape = (N_CHAINS, N_BURN+N_ITER, 2)
-
 def run_all_chains(mcmc_abc_single, key, theta0, n_chains=N_CHAINS,
                    n_burn=N_BURN, n_iter=N_ITER):
     """
@@ -251,7 +204,7 @@ def run_all_chains(mcmc_abc_single, key, theta0, n_chains=N_CHAINS,
     subkeys = jax.random.split(key, n_chains)
 
     # vmap uniquement sur les keys, pas les autres params.
-    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axis=(0, None, None))
+    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axes=(0, None, None))
     # Lancer toutes les chaînes en parallèle
     all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0, n_burn + n_iter)
 
@@ -259,19 +212,6 @@ def run_all_chains(mcmc_abc_single, key, theta0, n_chains=N_CHAINS,
 
     return chains_post, all_acc_rates
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# BLOC F — Diagnostics  [À COMPLÉTER]
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# Implémente l'ACF (autocorrélation empirique) pour une seule série.
-# Formule : pour le lag k,
-#   ACF(k) = mean((x[k:] - mean(x)) * (x[:-k] - mean(x))) / var(x)
-#
-# HINT : même logique que la fonction acf() dans le notebook RWMH du cours,
-#        mais vectorisée avec jnp (pas de boucle Python sur k).
-#        Tu peux utiliser une boucle Python sur les lags (petit nombre),
-#        mais les opérations internes doivent être JAX.
 
 def compute_acf(x, max_lag=50):
     """
@@ -283,14 +223,14 @@ def compute_acf(x, max_lag=50):
     Returns:
         acf : array (max_lag,)
     """
-    # ── TON CODE ICI ──────────────────────────────────────────────────────────
-    # n = len(x)
-    # mean_x = jnp.mean(x)
-    # var_x  = jnp.mean((x - mean_x)**2)
-    # Pour k in range(1, max_lag+1) :
-    #   acf[k-1] = mean((x[k:] - mean_x) * (x[:n-k] - mean_x)) / var_x
-    raise NotImplementedError("BLOC F — À compléter")
-    # ─────────────────────────────────────────────────────────────────────────
+
+    acf = jnp.zeros(shape=(max_lag,))
+    n = len(x)
+    mean_x = jnp.mean(x)
+    var_x = jnp.mean(x**2) - jnp.mean(x)**2
+    for k in range(1, max_lag+1):
+        acf = acf.at[k-1].set(jnp.mean((x[k:] - mean_x) * (x[:n-k] - mean_x)) / var_x)
+    return acf
 
 
 # ─── Visualisation des résultats ─────────────────────────────────────────────
@@ -369,7 +309,7 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
                 transform=ax.transAxes, ha="right", va="top",
                 fontsize=8, bbox=dict(boxstyle="round", fc="white", alpha=0.8))
 
-    plt.savefig("/mnt/user-data/outputs/mcmc_abc_results.png",
+    plt.savefig("MCMC-ABC_plots/mcmc_abc_results.png",
                 dpi=150, bbox_inches="tight")
     plt.show()
     print("Figure sauvegardée.")
@@ -406,7 +346,7 @@ def plot_sensitivity_epsilon(results_by_eps, true_mu=TRUE_MU, true_sigma=TRUE_SI
         ax.legend(fontsize=8)
 
     plt.tight_layout()
-    plt.savefig("/mnt/user-data/outputs/mcmc_abc_sensitivity_eps.png",
+    plt.savefig("MCMC-ABC_plots/mcmc_abc_sensitivity_eps.png",
                 dpi=150, bbox_inches="tight")
     plt.show()
 
@@ -443,14 +383,29 @@ if __name__ == "__main__":
     results_by_eps = {}
     for eps in [0.5, 1.0, 1.5, 2.5]:
         print(f"  ε = {eps}...")
-        # ── TON CODE ICI ──────────────────────────────────────────────────────
-        # Pour chaque epsilon :
-        #   1. Construis make_mcmc_abc(Y_OBS_sorted, eps)
-        #   2. Lance run_all_chains
-        #   3. Thinne et mets à plat les résultats
-        #   4. Stocke dans results_by_eps[eps] = (flat_mu, flat_sigma)
-        pass
-        # ─────────────────────────────────────────────────────────────────────
+
+        mcmc_fn = make_mcmc_abc(Y_OBS_sorted, eps)
+
+        # Recherche d'un theta0
+        key_run, key_init = jax.random.split(key_run)
+        theta0_eps, _ = find_valid_init(key_init, Y_OBS_sorted, eps)
+
+        # Lancement des chaines
+        key_run, key_chains = jax.random.split(key_run)
+        chains_eps, acc_eps = run_all_chains(mcmc_fn, key_chains, theta0_eps)
+        print(f"     Taux d'acceptation moyen : {float(jnp.mean(acc_eps)):.3f}")
+
+        # Thinning
+        chains_thin = chains_eps[:, ::K_THIN, :]
+
+        # Chaque chaine produit N_ITER observations de la posterior distribution.
+        # Sous condition que chaque chaine ait convergé, par indépendance on regroupe tout
+        # et la distribution posterior estimée contient N_CHAINS * N_ITER obs.
+        flat_mu    = np.array(chains_thin[:, :, 0]).ravel()
+        flat_sigma = np.array(chains_thin[:, :, 1]).ravel()
+
+        # Sauvegarde
+        results_by_eps[eps] = (flat_mu, flat_sigma)
 
     if results_by_eps:
         plot_sensitivity_epsilon(results_by_eps)
