@@ -21,9 +21,9 @@ S_PRIOR = 1.0
 T_PRIOR = 1.0
 
 # Chaîne MCMC
-N_CHAINS  = 5       # nombre de chaînes parallèles (vmappées)
-N_BURN    = 20_000   # longueur du burn-in
-N_ITER    = 100_000  # longueur post-burn-in
+N_CHAINS  = 1       # nombre de chaînes parallèles (vmappées)
+N_BURN    = 10_000   # longueur du burn-in
+N_ITER    = 50_000  # longueur post-burn-in
 K_THIN    = 100       # facteur de thinning
 
 EPSILON   = 0.6     # tolérance ABC (à calibrer via pilot run)
@@ -106,7 +106,7 @@ def propose(key, theta, delta=DELTA):
     return jnp.array([mu_new, sigma_new])
 
 
-def make_mcmc_abc(y_obs_sorted, epsilon, delta, m_sim=M_SIM, l=L):
+def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SIM, l=L):
     """
     Factory (comme make_rwmh dans le cours) qui retourne la fonction
     de chaîne unique mcmc_abc_single.
@@ -136,7 +136,7 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, m_sim=M_SIM, l=L):
 
         # Acceptation ou rejet
         eps_accept = (d <= epsilon)
-        log_h = log_prior(theta_new) - log_prior(theta_curr)
+        log_h = log_prior(theta_new, s, t) - log_prior(theta_curr, s, t)
         log_u = jnp.log(jax.random.uniform(key_acc))
         accept = eps_accept & (log_h > log_u)
         theta_curr = jnp.where(accept, theta_new, theta_curr)
