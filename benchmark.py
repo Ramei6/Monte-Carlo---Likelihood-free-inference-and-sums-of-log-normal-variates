@@ -457,7 +457,22 @@ def run_benchmark() -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def make_plots(df: pd.DataFrame) -> None:
-    """6-panel comparison with error bands, log-scale runtime, and speedup ratio."""
+    """6-panel comparison — improved readability."""
+
+    # ── global style ──────────────────────────────────────────────────────────
+    plt.rcParams.update({
+        "font.family":      "DejaVu Sans",
+        "font.size":        12,
+        "axes.titlesize":   13,
+        "axes.titleweight": "bold",
+        "axes.labelsize":   12,
+        "axes.spines.top":  False,
+        "axes.spines.right":False,
+        "legend.fontsize":  10,
+        "legend.framealpha":0.9,
+        "xtick.labelsize":  11,
+        "ytick.labelsize":  11,
+    })
 
     grp  = df.groupby(["method", "epsilon"])
     mean = grp.mean(numeric_only=True).reset_index()
@@ -471,103 +486,172 @@ def make_plots(df: pd.DataFrame) -> None:
     R_m, R_s = _get("Reject-ABC")
     M_m, M_s = _get("MCMC-ABC")
 
-    C_R, C_M = "#C0392B", "#2471A3"     # red = Reject-ABC, blue = MCMC-ABC
+    C_R, C_M = "#C0392B", "#2471A3"
     eps = R_m.epsilon.values
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    fig.patch.set_facecolor("#F8F9FA")
+    for ax in axes.flat:
+        ax.set_facecolor("#FFFFFF")
+
     fig.suptitle(
-        r"Reject-ABC  vs  MCMC-ABC — Comparison across $\varepsilon$"
-        "\n"
-        r"model: $Y_i=\!\sum_\ell e^{X_{i,\ell}}$, "
-        r"$\mu_0=0$, $\sigma_0^2=0.09$, $n=1\,000$, $L=10$"
-        f"\n(mean \u00b1 1 std over {R} repetitions)",
-        fontsize=12,
+        "Reject-ABC  vs  MCMC-ABC  —  Full Comparison",
+        fontsize=17, fontweight="bold", color="#2C3E50", y=1.01,
+    )
+    fig.text(
+        0.5, 0.985,
+        r"Model: $Y_i=\sum_\ell e^{X_{i,\ell}}$,  "
+        r"truth: $\mu_0=0$, $\sigma_0^2=0.09$,  $n=1000$, $L=10$"
+        f"  |  mean ± 1 std over {R} repetitions",
+        ha="center", fontsize=11, color="#555",
     )
 
-    def _band(ax, x, m_col, s_col, m_df, s_df, color, marker, ls, label):
+    def _band(ax, x, m_col, m_df, s_df, color, marker, ls, label, lw=2.5, ms=8):
         y  = m_df[m_col].values
-        dy = s_df[s_col].values
-        ax.plot(x, y, marker=marker, ls=ls, color=color, lw=2, ms=6, label=label)
-        ax.fill_between(x, y - dy, y + dy, color=color, alpha=0.15)
+        dy = s_df[m_col].values
+        ax.plot(x, y, marker=marker, ls=ls, color=color, lw=lw, ms=ms,
+                label=label, zorder=3)
+        ax.fill_between(x, y - dy, y + dy, color=color, alpha=0.12, zorder=2)
+
+    def _annotate_points(ax, x, y, color, fmt="{:.1f}s", offset=(0, 6)):
+        for xi, yi in zip(x, y):
+            ax.annotate(fmt.format(yi), xy=(xi, yi),
+                        xytext=(offset[0], offset[1]), textcoords="offset points",
+                        fontsize=8.5, color=color, ha="center", fontweight="bold")
 
     # ── (a) Runtime — log scale ───────────────────────────────────────────────
     ax = axes[0, 0]
-    _band(ax, eps, "runtime_s", "runtime_s", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
-    _band(ax, eps, "runtime_s", "runtime_s", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
+    _band(ax, eps, "runtime_s", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "runtime_s", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
+    _annotate_points(ax, eps, R_m["runtime_s"].values, C_R, fmt="{:.1f}s", offset=(0, 6))
+    _annotate_points(ax, eps, M_m["runtime_s"].values, C_M, fmt="{:.1f}s", offset=(0, -14))
     ax.set_yscale("log")
-    ax.set_xlabel(r"Tolerance $\varepsilon$")
-    ax.set_ylabel("Wall-clock time (s)  [log scale]")
-    ax.set_title(r"(a) Runtime vs $\varepsilon$")
-    ax.legend(fontsize=9)
-    ax.grid(True, which="both", alpha=0.3)
+    ax.set_xlabel("Tolerance  ε", labelpad=6)
+    ax.set_ylabel("Wall-clock time (seconds)  [log scale]", labelpad=6)
+    ax.set_title("(a)  Runtime vs ε")
+    ax.legend(loc="upper right")
+    ax.grid(True, which="both", alpha=0.25, linestyle="--")
+    ax.set_xticks(eps)
 
-    # ── (b) Speedup ratio Reject / MCMC ──────────────────────────────────────
+    # ── (b) Speedup ratio ─────────────────────────────────────────────────────
     ax = axes[0, 1]
     ratio = R_m["runtime_s"].values / M_m["runtime_s"].values
-    bars  = ax.bar(eps, ratio, width=0.18, color=C_R, alpha=0.75, edgecolor="white")
-    ax.axhline(1, color="#555", lw=1.2, ls="--", label="Ratio = 1  (equal speed)")
+    colors_bar = [C_R if r > 1 else C_M for r in ratio]
+    bars = ax.bar(eps, ratio, width=0.22, color=colors_bar, alpha=0.80,
+                  edgecolor="white", linewidth=1.5, zorder=3)
+    ax.axhline(1, color="#333", lw=1.8, ls="--", zorder=4,
+               label="Equal speed  (ratio = 1)")
     for bar, v in zip(bars, ratio):
-        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.3,
-                f"{v:.1f}×", ha="center", va="bottom", fontsize=8.5, color=C_R)
-    ax.set_xlabel(r"Tolerance $\varepsilon$")
-    ax.set_ylabel(r"$t_{\rm Reject} \;/\; t_{\rm MCMC}$")
-    ax.set_title("(b) Speedup ratio (Reject / MCMC)")
-    ax.legend(fontsize=9)
-    ax.grid(True, axis="y", alpha=0.3)
+        ypos = v + 0.18 if v >= 1 else v - 0.45
+        label_txt = f"{v:.1f}×"
+        ax.text(bar.get_x() + bar.get_width()/2, ypos,
+                label_txt, ha="center", va="bottom", fontsize=10,
+                fontweight="bold",
+                color=C_R if v >= 1 else C_M)
+    ax.fill_between([eps[0]-0.3, eps[-1]+0.3], [0, 0], [1, 1],
+                    color=C_M, alpha=0.06, zorder=1)
+    ax.fill_between([eps[0]-0.3, eps[-1]+0.3], [1, 1], [max(ratio)+2, max(ratio)+2],
+                    color=C_R, alpha=0.06, zorder=1)
+    ax.text(2.5, max(ratio)*0.7, "Reject\nslower", color=C_R,
+            fontsize=9, ha="center", alpha=0.7)
+    ax.text(2.5, 0.55, "MCMC\nslower", color=C_M,
+            fontsize=9, ha="center", alpha=0.7)
+    ax.set_xlabel("Tolerance  ε", labelpad=6)
+    ax.set_ylabel("Reject runtime  /  MCMC runtime", labelpad=6)
+    ax.set_title("(b)  Speedup ratio  (Reject ÷ MCMC)")
+    ax.legend(loc="upper right")
+    ax.grid(True, axis="y", alpha=0.25, linestyle="--")
+    ax.set_xticks(eps)
+    ax.set_ylim(0, max(ratio) * 1.25)
 
     # ── (c) Posterior mean μ ──────────────────────────────────────────────────
     ax = axes[0, 2]
-    _band(ax, eps, "mean_mu", "mean_mu", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
-    _band(ax, eps, "mean_mu", "mean_mu", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
-    ax.axhline(TRUE_MU, color="#555", lw=1.4, ls=":", label=r"$\mu_0 = 0.0$")
-    ax.set_xlabel(r"Tolerance $\varepsilon$")
-    ax.set_ylabel(r"$\hat{\mu} = \mathbb{E}[\mu \mid y^\star]$")
-    ax.set_title(r"(c) Posterior mean $\mu$ vs $\varepsilon$")
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
+    _band(ax, eps, "mean_mu", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "mean_mu", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
+    ax.axhline(TRUE_MU, color="#2C3E50", lw=2, ls=":",
+               label=f"True  μ₀ = {TRUE_MU:.1f}")
+    ax.annotate("Truth  μ₀ = 0", xy=(eps[-1], TRUE_MU),
+                xytext=(-60, 8), textcoords="offset points",
+                fontsize=9, color="#2C3E50",
+                arrowprops=dict(arrowstyle="->", color="#2C3E50", lw=1))
+    ax.set_xlabel("Tolerance  ε", labelpad=6)
+    ax.set_ylabel("Posterior mean  E[μ | y*]", labelpad=6)
+    ax.set_title("(c)  Posterior mean  μ  vs ε")
+    ax.legend(loc="lower left")
+    ax.grid(True, alpha=0.25, linestyle="--")
+    ax.set_xticks(eps)
 
     # ── (d) Posterior mean σ² ─────────────────────────────────────────────────
     ax = axes[1, 0]
-    _band(ax, eps, "mean_sigma2", "mean_sigma2", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
-    _band(ax, eps, "mean_sigma2", "mean_sigma2", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
-    ax.axhline(TRUE_SIGMA2, color="#555", lw=1.4, ls=":", label=r"$\sigma_0^2 = 0.09$")
-    ax.set_xlabel(r"Tolerance $\varepsilon$")
-    ax.set_ylabel(r"$\widehat{\sigma^2} = \mathbb{E}[\sigma^2 \mid y^\star]$")
-    ax.set_title(r"(d) Posterior mean $\sigma^2$ vs $\varepsilon$")
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
+    _band(ax, eps, "mean_sigma2", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "mean_sigma2", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
+    ax.axhline(TRUE_SIGMA2, color="#2C3E50", lw=2, ls=":",
+               label=f"True  σ₀² = {TRUE_SIGMA2:.2f}")
+    ax.annotate(f"Truth  σ₀² = {TRUE_SIGMA2:.2f}", xy=(eps[0], TRUE_SIGMA2),
+                xytext=(30, -18), textcoords="offset points",
+                fontsize=9, color="#2C3E50",
+                arrowprops=dict(arrowstyle="->", color="#2C3E50", lw=1))
+    ax.set_xlabel("Tolerance  ε", labelpad=6)
+    ax.set_ylabel("Posterior mean  E[σ² | y*]", labelpad=6)
+    ax.set_title("(d)  Posterior mean  σ²  vs ε")
+    ax.legend(loc="upper left")
+    ax.grid(True, alpha=0.25, linestyle="--")
+    ax.set_xticks(eps)
 
     # ── (e) Acceptance rate ───────────────────────────────────────────────────
     ax = axes[1, 1]
-    _band(ax, eps, "acc_rate", "acc_rate", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
-    _band(ax, eps, "acc_rate", "acc_rate", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
-    ax.set_xlabel(r"Tolerance $\varepsilon$")
-    ax.set_ylabel("Acceptance rate")
-    ax.set_title(r"(e) Acceptance rate vs $\varepsilon$")
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
+    _band(ax, eps, "acc_rate", R_m, R_s, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "acc_rate", M_m, M_s, C_M, "s", "--", "MCMC-ABC")
+    # annotate the gap at ε=0.5
+    y_r = R_m["acc_rate"].values[0]
+    y_m = M_m["acc_rate"].values[0]
+    ax.annotate("", xy=(0.5, y_m), xytext=(0.5, y_r),
+                arrowprops=dict(arrowstyle="<->", color="#888", lw=1.5))
+    ax.text(0.62, (y_r + y_m)/2,
+            f"MCMC accepts\n{y_m/y_r:.0f}× more\nat ε=0.5",
+            fontsize=8.5, color="#555", va="center")
+    ax.yaxis.set_major_formatter(
+        plt.matplotlib.ticker.FuncFormatter(lambda x, _: f"{x:.1%}"))
+    ax.set_xlabel("Tolerance  ε", labelpad=6)
+    ax.set_ylabel("Acceptance rate", labelpad=6)
+    ax.set_title("(e)  Acceptance rate  vs ε")
+    ax.legend(loc="upper left")
+    ax.grid(True, alpha=0.25, linestyle="--")
+    ax.set_xticks(eps)
 
-    # ── (f) Absolute bias for μ and σ² ───────────────────────────────────────
+    # ── (f) Absolute bias ─────────────────────────────────────────────────────
     ax = axes[1, 2]
     bias_mu_R  = (R_m["mean_mu"]     - TRUE_MU).abs().values
     bias_mu_M  = (M_m["mean_mu"]     - TRUE_MU).abs().values
     bias_s2_R  = (R_m["mean_sigma2"] - TRUE_SIGMA2).abs().values
     bias_s2_M  = (M_m["mean_sigma2"] - TRUE_SIGMA2).abs().values
-    ax.plot(eps, bias_mu_R,  "o-",   color=C_R, lw=2, ms=6,  label=r"Reject $|\hat\mu - \mu_0|$")
-    ax.plot(eps, bias_mu_M,  "s--",  color=C_M, lw=2, ms=6,  label=r"MCMC $|\hat\mu - \mu_0|$")
-    ax.plot(eps, bias_s2_R,  "o:",   color=C_R, lw=2, ms=6,
-            label=r"Reject $|\widehat{\sigma^2} - \sigma_0^2|$")
-    ax.plot(eps, bias_s2_M,  "s:",   color=C_M, lw=2, ms=6,
-            label=r"MCMC $|\widehat{\sigma^2} - \sigma_0^2|$")
-    ax.set_xlabel(r"Tolerance $\varepsilon$")
-    ax.set_ylabel("Absolute bias")
-    ax.set_title(r"(f) Bias vs $\varepsilon$  (solid $= \mu$, dotted $= \sigma^2$)")
-    ax.legend(fontsize=8, ncol=2)
-    ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    ax.plot(eps, bias_mu_R, "o-",  color=C_R, lw=2.5, ms=8,
+            label="Reject  |μ̂ − μ₀|")
+    ax.plot(eps, bias_mu_M, "s--", color=C_M, lw=2.5, ms=8,
+            label="MCMC    |μ̂ − μ₀|")
+    ax.plot(eps, bias_s2_R, "o-",  color=C_R, lw=2.5, ms=8, alpha=0.45,
+            linestyle=":", label="Reject  |σ̂² − σ₀²|")
+    ax.plot(eps, bias_s2_M, "s--", color=C_M, lw=2.5, ms=8, alpha=0.45,
+            linestyle=":", label="MCMC    |σ̂² − σ₀²|")
+
+    # label the two groups on the right
+    ax.text(eps[-1]+0.04, bias_s2_R[-1], "σ² bias", fontsize=9,
+            color="#888", va="center")
+    ax.text(eps[-1]+0.04, bias_mu_R[-1], "μ bias",  fontsize=9,
+            color="#888", va="center")
+
+    ax.set_xlabel("Tolerance  ε", labelpad=6)
+    ax.set_ylabel("Absolute bias", labelpad=6)
+    ax.set_title("(f)  Bias vs ε  (solid = μ,  dotted = σ²)")
+    ax.legend(loc="upper left", ncol=2, fontsize=9)
+    ax.grid(True, alpha=0.25, linestyle="--")
+    ax.set_xticks(eps)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
     plot_path = "benchmark_results/benchmark_plots.png"
-    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.savefig(plot_path, dpi=160, bbox_inches="tight", facecolor="#F8F9FA")
+    plt.rcParams.update(plt.rcParamsDefault)   # reset style
     print(f"Plots saved  → {plot_path}")
 
 

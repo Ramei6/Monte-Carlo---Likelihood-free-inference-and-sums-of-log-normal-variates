@@ -126,7 +126,156 @@ Samples from the ABC posterior, when used to simulate new datasets, produce data
 
 ## Question 2 — MCMC-ABC
 
-SENGHAK
+*The code for this section and more detailed insights about the results can be found in `MCMC_ABC_optimizedv3.ipynb`.*
+
+### Why MCMC-ABC
+
+Reject-ABC is conceptually simple, but it is wasteful: every proposal is drawn independently from the prior, so most simulated datasets are far from the observed one and are immediately discarded. MCMC-ABC, introduced by Marjoram et al. (2003), keeps the same ABC idea but turns it into a Markov chain. Instead of restarting from the prior each time, it proposes a new parameter close to the current one, simulates pseudo-data, and accepts the move only if the simulated data is close enough to the observations and the Metropolis-Hastings ratio is favorable. In practice, this means that once the chain has reached a plausible region, it keeps exploring locally instead of wasting most proposals in irrelevant parts of the prior.
+
+### Distance
+
+We keep the same 1-Wasserstein distance $W_1$ as in Q1.
+
+### Prior
+
+As in Q1, we use
+
+$$
+\mu \sim \mathcal{N}(0, s^2), \qquad \log(\sigma^2) \sim \mathcal{N}(0, t^2).
+$$
+
+The log-parametrisation keeps $\sigma^2 > 0$ automatically. The hyperparameters $s$ and $t$ control how diffuse the prior is on $\mu$ and $\log(\sigma^2)$ respectively.
+
+### The algorithm
+
+The MCMC-ABC chain targets the augmented distribution
+
+$$
+\pi(\theta, y^{\mathrm{sim}}) \propto \pi(\theta)\;\mathbf{1}\!\left[W_1(y^{\mathrm{sim}}, y^\star) \leq \varepsilon\right],
+$$
+
+whose marginal in $\theta$ is the ABC posterior. At each step we use a random-walk proposal on $(\mu, \log \sigma)$ with step size $\delta$:
+
+```
+Given current state (theta, y_sim):
+  1. Propose theta* = theta + delta * xi,   xi ~ N(0, I_2)
+  2. Simulate y* under theta*
+  3. If W1(y*, y_obs) > epsilon: reject immediately
+  4. Otherwise accept theta* with probability min(1, pi(theta*) / pi(theta))
+```
+
+So $\varepsilon$ controls the ABC approximation itself, while $\delta$ controls how far each proposal jumps from the current state. The first parameter mainly affects bias, the second mainly affects mixing.
+
+### Baseline run and recurring diagnostics
+
+To make the comparisons easier to read, we first define a **baseline run**: fix a set of parameters, run the algorithm, and compute the main diagnostics. Then each **scan** varies only one tuning parameter and monitors how the same diagnostics change.
+
+The baseline used here is $\varepsilon = 0.6$, $\delta = 0.3$, $N_{\mathrm{burn}} = 10\,000$, $N_{\mathrm{iter}} = 50\,000$, with one chain. The key diagnostics are:
+
+- **Bias**: posterior mean minus the true value.
+- **Acceptance rate**: proportion of proposed moves that are accepted.
+- **Posterior width / std type (A)**: spread of the ABC posterior.
+- **ESS ratio**: $\mathrm{ESS}/(N_{\mathrm{chains}} \times N_{\mathrm{iter}})$, which measures mixing efficiency.
+- **$\hat{R}$ (Gelman-Rubin statistic)**: a multi-chain convergence diagnostic. It should be close to 1, and values above about 1.1 indicate that chains have not stabilized to the same distribution. Since the baseline here uses only one chain, $\hat{R}$ is not defined for that run itself; it becomes useful in the multi-chain scans.
+
+![Baseline diagnostics](MCMC-ABC_plots/mcmc_abc_results.png)
+*Figure 1: Baseline diagnostics. The figure shows the trace plots, autocorrelation functions, and marginal posteriors for $\mu$ and $\sigma$.*
+
+| Metric | Value for $\mu$ | Value for $\sigma$ |
+| --- | --- | --- |
+| Posterior median | −0.038 | 0.396 |
+| Bias | −0.045 | +0.096 |
+| Posterior std (A) | 0.041 | 0.071 |
+| 95% CI width | 0.151 | 0.280 |
+| ESS ratio | 2.0% | 1.3% |
+| Acceptance rate | 6.8% | — |
+
+At baseline, the posterior for $\mu$ is reasonably close to the truth: the mean bias is about $-0.045$. The harder parameter is $\sigma$, whose posterior mean is about $0.396$, so the bias is about $+0.096$. This is the same qualitative issue as in Q1: with a finite $\varepsilon$, the ABC posterior is only an approximation, and the prior on $\log(\sigma^2)$ is centered around $\sigma^2 = 1$, which tends to pull the inference upward. The chain is usable but not especially efficient, with ESS ratios around 2.0% for $\mu$ and 1.3% for $\sigma$.
+
+### Effect of $\varepsilon$
+
+Smaller $\varepsilon$ reduces the ABC approximation bias but also reduces the acceptance rate, which slows chain mixing and raises Monte Carlo uncertainty. The table below ($\delta = 0.25$ fixed, averaged over 3 datasets) illustrates the trade-off:
+
+| $\varepsilon$ | Acceptance rate | Bias $\mu$ | Bias $\sigma$ | ESS ratio $\mu$ |
+| --- | --- | --- | --- | --- |
+| 0.15 | 1.2% | −0.006 | +0.018 | 0.13% |
+| 0.46 | 6.5% | −0.025 | +0.071 | 0.46% |
+| 0.66 | 9.8% | −0.044 | +0.114 | 0.69% |
+| 0.97 | 14.9% | −0.076 | +0.174 | 0.92% |
+| 1.47 | 23.6% | −0.128 | +0.256 | 1.36% |
+| 2.49 | 39.4% | −0.231 | +0.378 | 1.56% |
+| 3.00 | 45.3% | −0.277 | +0.423 | 1.53% |
+
+![Epsilon scan — 9 diagnostics](MCMC-ABC_plots/scan_epsilon.png)
+*Figure 2: Sensitivity of all diagnostics to $\varepsilon$ (5 datasets, 5 chains each). Each curve is the mean over datasets; the shaded band is ±1 inter-dataset std.*
+
+![Posterior distributions at several values of epsilon](MCMC-ABC_plots/mcmc_abc_sensitivity_eps.png)
+*Figure 3: Posterior distributions for $\mu$ and $\sigma$ at several values of $\varepsilon$. As $\varepsilon$ increases the posterior widens and shifts away from the truth.*
+
+**Bias increases with $\varepsilon$.** Both $|\mathrm{bias}_\mu|$ and $\mathrm{bias}_\sigma$ grow roughly linearly with $\varepsilon$. At $\varepsilon = 3.0$, the bias on $\mu$ reaches $-0.277$ and the bias on $\sigma$ reaches $+0.423$.
+
+**The acceptance rate increases with $\varepsilon$.** A looser constraint accepts more proposals. To reach the 20–40% target zone one needs $\varepsilon \gtrsim 1.5$, but that comes at the cost of increased bias.
+
+**The credible intervals widen with $\varepsilon$.** The 95% CI width grows linearly: a larger $\varepsilon$ accepts a broader range of parameters, inflating the posterior.
+
+**Behavior at very small $\varepsilon$.** At $\varepsilon = 0.05$, almost no proposals are accepted (acceptance rate $\approx 0.003\%$). The chain barely moves away from its initialization point. As a consequence, $\hat{R}$ jumps to $\approx 1.23$ — the chains are frozen near their respective starting positions and never agree on the same distribution. In that regime the results are dominated by where the chain started, not by the actual posterior.
+
+The key takeaway is the same as in Q1: there is no free lunch. Reducing $\varepsilon$ improves accuracy but costs efficiency. The baseline $\varepsilon = 0.6$ sits at a reasonable point on this curve.
+
+### Effect of $\delta$
+
+$\delta$ is the random-walk step size on $(\mu, \log \sigma)$. It controls mixing efficiency but not the ABC approximation quality: across all tested values, $\mathrm{bias}_\mu \approx -0.08$ and $\mathrm{bias}_\sigma \approx +0.18$ remain essentially flat ($\varepsilon = 1$ fixed throughout).
+
+| $\delta$ | Acceptance rate | ESS ratio $\mu$ |
+| --- | --- | --- |
+| 0.01 | 89.9% | 0.13% |
+| 0.09 | 47.2% | 0.82% |
+| 0.17 | 25.0% | 1.08% |
+| **0.20** | **20.7%** | **1.17%** |
+| 0.26 | 14.9% | 1.03% |
+| 0.50 | 5.2% | 0.47% |
+| 0.80 | 2.2% | 0.28% |
+
+![Delta scan](MCMC-ABC_plots/scan_delta.png)
+*Figure 4: ESS ratio and acceptance rate as a function of $\delta$ ($\varepsilon = 1$ fixed, 3 datasets). The ESS peaks around $\delta \approx 0.20$, where the acceptance rate is about 21%.*
+
+Very small $\delta$: acceptance is high but consecutive draws are nearly identical → low ESS. Very large $\delta$: proposals jump far and rarely pass the ABC test → low acceptance and low ESS. The ESS ratio peaks around $\delta \approx 0.20$ with an acceptance rate near 21%. This is consistent with the rule of thumb for random-walk Metropolis (optimal acceptance $\approx 23\%$ in high dimension).
+
+### Effect of $s$ and $t$
+
+We scan a $12 \times 12$ grid of $(s, t)$ values.
+
+![Prior sensitivity heatmaps](MCMC-ABC_plots/scan_prior_heatmaps.png)
+*Figure 5: Bias on $\sigma$ and ESS ratio over the full $(s,t)$ grid. The vertical structure (columns nearly uniform) shows that $s$ barely matters; the horizontal structure (rows vary strongly) shows that $t$ dominates.*
+
+![Prior sensitivity 1D cuts](MCMC-ABC_plots/scan_prior_coupes1D.png)
+*Figure 6: 1D cross-sections — fixing $s = 0.1$ and varying $t$ (left), fixing $t = 1.68$ and varying $s$ (right).*
+
+**Effect of $s$ (width of prior on $\mu$).** The bias and ESS ratio are nearly flat across all tested $s$ values. A wider prior just sends more proposals to extreme $\mu$ values and slightly lowers the acceptance rate, but the posterior summaries barely change because the data already concentrates the posterior near the truth. This is exactly the same finding as in Q1.
+
+**Effect of $t$ (width of prior on $\log \sigma^2$).** $t$ has a much stronger effect:
+
+| $t$ | Acceptance rate | Bias $\sigma$ |
+| --- | --- | --- |
+| 0.10 | 0.023% | +0.214 |
+| 0.36 | 1.1% | +0.179 |
+| 0.89 | 5.9% | +0.110 |
+| **1.68** | **9.9%** | **+0.029** ← baseline |
+| 2.21 | 10.8% | −0.012 |
+| 3.00 | 11.3% | −0.046 |
+
+At $t = 0.1$ the prior on $\log \sigma^2$ is so tight around $\sigma^2 = 1$ that it barely covers the true $\sigma_0^2 = 0.09$. The acceptance rate collapses to $0.023\%$ — the chain nearly fails — and the bias for $\sigma$ is $+0.214$. At $t = 1.68$ (baseline) the prior is wide enough that the likelihood drives the posterior, and the bias drops to $+0.029$. For very large $t$ the posterior slightly overshoots below the truth ($\mathrm{bias}_\sigma < 0$) because the prior now also covers small $\sigma$ values.
+
+The conclusion is the same as Q1: $s$ **barely matters**, $t$ **matters a lot**.
+
+### Computational scaling and conclusion
+
+![Computation time](MCMC-ABC_plots/scaling_time.png)
+*Figure 7: Computation time as a function of $N_{\mathrm{iter}}$ (left) and $N_{\mathrm{chains}}$ under `vmap` parallelization (right).*
+
+With the number of chains fixed, runtime grows roughly linearly with $N_{\mathrm{iter}}$: from about 7 seconds at the smallest run to about 46 seconds at 25 000 iterations. With `vmap`, increasing the number of chains from 1 to 16 raises runtime from about 10 seconds to about 106 seconds. This is not free, but it is still much better than running all chains strictly one after the other.
+
+Overall, MCMC-ABC is a clear improvement over Reject-ABC because it reuses past good states instead of drawing fresh proposals from the prior every time. But the main lesson from the scans is that the qualitative roles of the tuning parameters are different. $\varepsilon$ is the main accuracy-efficiency trade-off: larger values improve acceptance but increase bias and posterior width. $\delta$ mainly controls mixing and should be tuned near the region where acceptance stays around 20–25%. Finally, prior sensitivity is driven much more by $t$ than by $s$. In this problem, the method works reasonably well for $\mu$, but inference on $\sigma$ remains the harder part and stays sensitive to both the ABC tolerance and the prior on $\log(\sigma^2)$.
 
 ---
 
