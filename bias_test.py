@@ -241,9 +241,9 @@ def run_across_datasets(key, theta=(0.0, 0.3), n=10000, L=10, n_iter=1000, burn=
 import os
 import time
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     # Tes paramètres vrais pour vérifier le biais
-    theta_true = (0.0, 0.3)
+    theta_true = (0.0, 0.09)
     n_runs_target = 100
     
     print("🔥 Lancement du Warm-up (Compilation XLA)...")
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     
     # Sauvegarde Data
     np.savez_compressed(
-        os.path.join(output_dir, "mcmc_results_100runs.npz"), 
+        os.path.join(output_dir, "mcmc_results_100runs_sigma2=0.09.npz"), 
         mu_meds=mu_meds, mu_lows=mu_lows, mu_highs=mu_highs,
         sig2_meds=sig2_meds, sig2_lows=sig2_lows, sig2_highs=sig2_highs
     )
@@ -332,7 +332,7 @@ if __name__ == "__main__":
     axes[1, 1].legend()
 
     plt.tight_layout()
-    plot_path = os.path.join(output_dir, "mcmc_100runs_diagnostics.png")
+    plot_path = os.path.join(output_dir, "mcmc_100runs_sigma2=0.09.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"📊 Graphiques sauvegardés dans : {plot_path}")
