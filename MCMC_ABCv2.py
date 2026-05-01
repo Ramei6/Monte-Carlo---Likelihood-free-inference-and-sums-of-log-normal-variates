@@ -11,22 +11,23 @@ from functools import partial
 
 # ─── Hyperparamètres globaux ──────────────────────────────────────────────────
 L       = 10        # nombre de log-normales par observation
-M_OBS   = 1000       # taille du jeu de données observé
-M_SIM   = 1000       # taille du jeu simulé à chaque étape MH
+M_OBS   = 1000      # taille du jeu de données observé
+M_SIM   = 1000      # taille du jeu simulé à chaque étape MH
 TRUE_MU    = 0.0    # vraie valeur de mu
 TRUE_SIGMA = 0.3    # vraie valeur de sigma
+K_MEWE = 20         # Nombre de datasets à similer pour calcul de la MEWE
 
 # Prior : mu ~ N(0, s^2),  log(sigma^2) ~ N(0, t^2)
 S_PRIOR = 1.0
 T_PRIOR = 1.0
 
 # Chaîne MCMC
-N_CHAINS  = 1       # nombre de chaînes parallèles (vmappées)
-N_BURN    = 10_000   # longueur du burn-in
-N_ITER    = 50_000  # longueur post-burn-in
+N_CHAINS  = 5       # nombre de chaînes parallèles (vmappées)
+N_BURN    = 8_000   # longueur du burn-in
+N_ITER    = 40_000  # longueur post-burn-in
 K_THIN    = 100       # facteur de thinning
 
-EPSILON   = 0.6     # tolérance ABC (à calibrer via pilot run)
+EPSILON   = 1.5     # tolérance ABC (à calibrer via pilot run)
 DELTA      = 0.3   # std de la marche aléatoire sur mu et log(sigma)
 
 # ─── 0. Génération des données "observées" ───────────────────────────────────
@@ -42,18 +43,24 @@ Y_OBS = generate_observed_data(key_obs, TRUE_MU, TRUE_SIGMA, M_OBS, L)
 Y_OBS_sorted = jnp.sort(Y_OBS)   # pré-tri pour W1 efficace
 
 
-def wasserstein1(y_obs_sorted, y_sim):
+def mewe(y_obs_sorted, y_sim):
     """
-    Calcule W1 entre y_obs (déjà trié) et y_sim (non trié).
-
+    Calcule MEWE entre y_obs et K datasets simulés y_sim.
+    
     Args:
-        y_obs_sorted : array (m,) (données observées triées)
-        y_sim        : array (m,) (données simulées non triées)
+        y_obs_sorted : array (m,) — données observées triées
+        y_sim        : array (k, m) — K datasets simulés non triés
     Returns:
-        scalaire JAX : distance W1
+        scalaire JAX : MEWE (moyenne des K distances W1)
     """
-    y_sim_sorted = jnp.sort(y_sim)
-    return jnp.mean(jnp.abs(y_obs_sorted - y_sim_sorted))
+    # Trier chacun des K datasets
+    y_sim_sorted = jnp.sort(y_sim, axis=1)  # shape (k, m)
+    
+    # Calculer W1 pour chaque dataset (moyenne des différences)
+    W1_distances = jnp.mean(jnp.abs(y_obs_sorted - y_sim_sorted), axis=1)  # shape (k,)
+    
+    # Retourner la moyenne sur les K distances
+    return jnp.mean(W1_distances)
 
 
 def log_prior(theta, s=S_PRIOR, t=T_PRIOR):
@@ -72,21 +79,22 @@ def log_prior(theta, s=S_PRIOR, t=T_PRIOR):
     return lp_mu + lp_lsig2 
 
 
-def simulate(key, theta, m_sim=M_SIM, l=L):
+def simulate(key, theta, m_sim=M_SIM, l=L, k_mewe=K_MEWE):
     """
-    Simule m_sim observations sous le modèle paramétré par theta.
-
+    Simule k_mewe datasets de m_sim observations sous le modèle paramétré par theta.
+    
     Args:
-        key   : clé JAX PRNG
-        theta : array (2,) ([mu, sigma])
-        m_sim : nombre d'observations simulées
-        l     : nombre de log-normales par observation
+        key       : clé JAX PRNG
+        theta     : array (2,) ([mu, sigma])
+        m_sim     : nombre d'observations simulées par dataset (défaut : M_SIM = 1000)
+        l         : nombre de log-normales par observation
+        k_mewe    : nombre de datasets indépendants à générer
     Returns:
-        y_sim : array (m_sim,) — données simulées
+        y_sim : array (k_mewe, m_sim) — K datasets indépendants simulés
     """
     mu, sigma = theta[0], theta[1]
-    X = mu + sigma * jax.random.normal(key, shape=(m_sim, l))
-    return jnp.sum(jnp.exp(X), axis=1)     # Somme sur les colonnes
+    X = mu + sigma * jax.random.normal(key, shape=(k_mewe, m_sim, l))
+    return jnp.sum(jnp.exp(X), axis=2)  # Sum over l dimension → shape (k_mewe, m_sim)
 
 
 
@@ -106,7 +114,7 @@ def propose(key, theta, delta=DELTA):
     return jnp.array([mu_new, sigma_new])
 
 
-def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SIM, l=L):
+def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SIM, l=L, k_mewe=K_MEWE):
     """
     Factory (comme make_rwmh dans le cours) qui retourne la fonction
     de chaîne unique mcmc_abc_single.
@@ -129,10 +137,10 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SI
         theta_new = propose(key_prop, theta_curr, delta)
 
         # Simulation
-        y_sim = simulate(key_sim, theta_new, m_sim, l)
+        y_sim = simulate(key_sim, theta_new, m_sim=m_sim, l=l, k_mewe=k_mewe)
 
         # Calcul de la distance
-        d = wasserstein1(y_obs_sorted, y_sim)
+        d = mewe(y_obs_sorted, y_sim)
 
         # Acceptation ou rejet
         eps_accept = (d <= epsilon)
@@ -166,24 +174,20 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SI
     return mcmc_abc_single
 
 
-# FONCTION TEMPO: petit ABC à l'avenir
 def find_valid_init(key, y_obs_sorted, epsilon, n_tries=10_000,
-                    s=S_PRIOR, t=T_PRIOR):
+                    s=S_PRIOR, t=T_PRIOR, m_sim=M_SIM, l=L, k_mewe=K_MEWE):
     """
-    Cherche un theta0 tel que W1(Y_obs, Y_sim(theta0)) <= epsilon.
+    Cherche un theta0 tel que mewe(Y_obs, Y_sim(theta0)) <= epsilon.
     Utilise une boucle Python ici (appelée une seule fois, avant jit).
-    Inspiré de find_init dans le guide mcmc_abc du cours.
     """
     for _ in range(n_tries):
         key, k1, k2, k3 = jax.random.split(key, 4)
-        # Tirage depuis le prior
-        mu_try    = s * jax.random.normal(k1)
+        mu_try     = s * jax.random.normal(k1)
         log_s2_try = t * jax.random.normal(k2)
-        sigma_try = jnp.exp(0.5 * log_s2_try)
-        theta_try = jnp.array([mu_try, sigma_try])
-        # Simulation et distance
-        y_try = simulate(k3, theta_try)
-        d     = wasserstein1(y_obs_sorted, y_try)
+        sigma_try  = jnp.exp(0.5 * log_s2_try)
+        theta_try  = jnp.array([mu_try, sigma_try])
+        y_try = simulate(k3, theta_try, m_sim=m_sim, l=l, k_mewe=k_mewe)
+        d     = mewe(y_obs_sorted, y_try)
         if float(d) <= epsilon:
             return theta_try, key
     raise RuntimeError(
@@ -349,6 +353,7 @@ def plot_sensitivity_epsilon(results_by_eps, true_mu=TRUE_MU, true_sigma=TRUE_SI
     plt.savefig("MCMC-ABC_plots/mcmc_abc_sensitivity_eps.png",
                 dpi=150, bbox_inches="tight")
     plt.show()
+
 
 
 # ─── Script principal ─────────────────────────────────────────────────────────
