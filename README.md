@@ -235,7 +235,7 @@ The step-size $\tau$ controls the mixing of Block 2. If $\tau$ is too small, it 
 
 ### Verifying that the Gibbs Sampler is unbiased
 
-*The code for this section can be found in `bias_test.py`.*
+*The code for this sub-section can be found in `bias_test.py`.*
 
 In this sub part we take a look at the results of multiple runs of the Gibbs Sampler across different Datasets.
 The methodology is as follows:
@@ -264,9 +264,63 @@ Here is the result for higher variance (here **σ**² = 0.3 > 0.09)
 
 *Figure 4: Distribution of the best estimates across N=100 Gibbs Sampler runs using high-variance data*
 
-
 ---
 
 ## Question 4 — Comparing the methods
 
-GABRIEL
+Until now, we have always known the "true value" of the estimators, it is hence natural to use them to define the Bias introduiced by the ABC methods. Yet, this project aims at conducting inference on the parameters that generated the dataset Y. Which means that our ABC and exact implementations should be used to infere unknown parameters.
+This is the reason why, we will proceed as if the true parameters were unknown to us.
+
+*The code for this section can be found in `estimating_epsilon_bias.py` and `plots_epsilon_bias.py`.*
+
+This part aims at estimating the bias introduced by **ε** in the ABC methods. In order to do so we will consider the exact sampler from Question 3 as the ground truth or "best estimator" and we will focus on the empirical average of the posteriors to asses the bias induced by **ε**. Note that we will compare the Gibbs sampler to the MCMC-ABC algorithm derived in question 2 as the best representant of our ABC class.
+
+The methodology is as follows:
+
+```
+<estimating_espilon_bias.py>
+Generate 10 datasets Y
+For each Y:
+  Run the Gibbs sampler and save the posterior on θ
+  For values of ε in [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.5, 2, 5]:
+    Run the MCMC-ABC algorithm and save the posterior on θ
+
+Save all posteriors and aggreagated metrics to csv files
+
+<plots_epsilon_bias.py>
+Load the saved data and generate informative plots on the run
+```
+
+Here are the results we obtained from this study
+
+![Posterior_shifting](epsilon_comparison/figures/fig2_posterior_shift.png)
+
+*Figure 1: Posterior shift for different **ε** values on one dataset*
+
+The first result we notice is, similarly to part 1, that an increase in epsilon induces a flatter posterior (for both **μ** and **σ²**) and a directional shift of the center of the distribution away from the ground truth. Note that we observed that the posterior shifts to the left (negatives) for **μ** and to the right for **σ**² regardless of the dataset.
+Here is another example, showing a similar shift:
+
+![Posterior_shifting_other example](epsilon_comparison/figures/fig2_posterior_shift_ds_9.png)
+
+*Figure 2: Another example of posterior shift for different **ε** values on another dataset*
+
+The reason behind the fact that the direction of the shift is always the same is quite intuitive:
+First of all, **μ** and **σ** are coupled because  $ \mathbb{E}[Y\_i] = L \exp(\mu + \frac{\sigma^2}{2})$ and the sampler needs to fit data.
+Second, the posterior we get depends on the prior we chose. Since we chose **$\log(\sigma^2) \sim \mathcal{N}(0, t^2)$** with t close to 1 and we ran simulations with **σ**²= 0.09 << 1, the posterior on **σ** is dragged upwards (and **μ** downwards, to compensate).
+
+Thus the sign of the Bias is dependant on the prior we chose with respect to the "real" parameters.
+
+Now let's focus on the scale of the Bias introduced by **ε**:
+
+![Posterior_shifting_other example](epsilon_comparison/figures/fig1_bias_vs_epsilon.png)
+![Posterior_shifting_other example](epsilon_comparison/figures/fig4_bias_acceptance_tradeoff.png)
+*Figure 3&4: Growth of  $ \text{Bias} = \left| \mathbb{E}_{\text{ABC}}[\theta] - \mathbb{E}_{\text{Gibbs}}[\theta] \right| $ with respect to **ε***
+
+The results highlight a direct and continuous relationship between the tolerance **$\varepsilon$** and the estimation error. When **$\varepsilon$** is very small, the bias is almost zero, reflecting strong fidelity to the target distribution. However, as the tolerance widens, the mean absolute bias increases systematically. This degradation in precision does not affect the parameters equally: the error on the variance (**$\sigma^2$**) grows much more steeply and severely than that on the mean (**$\mu$**). In summary, relaxing the acceptance criterion **$\varepsilon$** inevitably deteriorates the inference, with a particularly marked penalty on the estimation of the data's dispersion.
+
+Furthermore, the growth of the bias is not strictly linear, but rather sub-linear (showing a logarithmic-like concavity). Interestingly, the trajectory of the bias curves mirrors the growth curve of the acceptance rate. This structural similarity highlights that the bias is inextricably linked to the acceptance probability: as the algorithm accepts a progressively larger fraction of the prior space, the estimation error grows following the same decelerating rate.
+
+![Posterior_shifting_other example](epsilon_comparison/figures/fig3_bias_per_dataset.png)
+*Figure 5: Individual Bias for all Datasets*
+
+Last but not least, the dispersion of the bias across the datasets Y appears to be very small with respect to the value of the bias. This result indicates that our estimation of the bias is reliable and that there is no need to verify with more data for this set

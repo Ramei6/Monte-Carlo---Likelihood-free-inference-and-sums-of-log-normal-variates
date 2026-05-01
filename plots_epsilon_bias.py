@@ -230,7 +230,9 @@ def plot_posterior_shift(df_gibbs, df_abc, eps_palette, ref_ds, out_dir):
                title_fontsize=9)
 
     fig.tight_layout()
-    path = os.path.join(out_dir, "fig2_posterior_shift.png")
+    # ADD the dataset ID to the output filename
+    filename = f"fig2_posterior_shift_ds_{ref_ds}.png"
+    path = os.path.join(out_dir, filename)
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     print(f"  ✓ {path}")
@@ -399,7 +401,13 @@ if __name__ == "__main__":
 
     print("Génération des figures...")
     plot_bias_vs_epsilon(df_bias, eps_palette, OUTPUT_DIR)
-    plot_posterior_shift(df_gibbs, df_abc, eps_palette, REF_DS, OUTPUT_DIR)
+    
+    # ── CHANGED: Loop through all datasets for the posterior shift plots ──
+    all_datasets = df_gibbs["dataset_id"].unique()
+    for ds_id in all_datasets:
+        plot_posterior_shift(df_gibbs, df_abc, eps_palette, ds_id, OUTPUT_DIR)
+    # ──────────────────────────────────────────────────────────────────────
+    
     plot_bias_per_dataset(df_summary, eps_palette, OUTPUT_DIR)
     plot_bias_acceptance_tradeoff(df_bias, eps_palette, OUTPUT_DIR)
 
