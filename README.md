@@ -22,13 +22,19 @@ Because the density of $Y_i$ is intractable, we cannot evaluate the likelihood d
 
 ### Distance
 
-We use the 1-Wasserstein distance $W_1$, which in one dimension simply means sorting both samples and taking the mean absolute gap:
+Following Bernton et al. (2017), we use a **MEWE-style averaged score**: for each proposed $\theta^*$, we simulate $K = 3$ independent fake datasets and average their 1-Wasserstein distances to the observed sample,
+
+$$
+\bar{W}_{1,K}(\theta^*) = \frac{1}{K}\sum_{k=1}^{K} W_1\!\left(y^{\mathrm{sim},(k)},\,y^\star\right),
+$$
+
+where each 1-Wasserstein term is just the mean absolute gap between sorted samples,
 
 $$
 W_1(y^{\text{sim}}, y^\star) = \frac{1}{n}\sum_{i=1}^{n}\left|y^{\text{sim}}_{(i)} - y^\star_{(i)}\right|.
 $$
 
-This is the distance used in Bernton et al. (2017), the paper the project is based on. It compares the full empirical distributions rather than a few hand-picked summary statistics, which matters here because no single statistic clearly captures all the information.
+Averaging over $K$ replications reduces the Monte Carlo noise that comes from judging a proposal with a single fake sample. It compares the full empirical distributions rather than a few hand-picked summary statistics, which matters here because no single statistic clearly captures all the information.
 
 ### Prior
 
@@ -48,9 +54,9 @@ The log-normal reparametrisation keeps $\sigma^2$ positive automatically.
 ```
 while number of accepted draws < N:
     1. draw θ* = (μ*, σ²*) from the prior
-    2. simulate Y*_1, ..., Y*_n under θ*
-    3. compute W1(Y*, y_obs)
-    4. if W1 ≤ ε: keep θ*
+    2. for k = 1, ..., K: simulate Y*^(k)_1, ..., Y*^(k)_n under θ*
+    3. compute W̄_{1,K}(θ*) = (1/K) Σ_k W1(Y*^(k), y_obs)
+    4. if W̄_{1,K}(θ*) ≤ ε: keep θ*
 ```
 
 The accepted draws are i.i.d. samples from the ABC posterior.
@@ -64,10 +70,10 @@ We chose the **1% quantile** ($\varepsilon \approx 0.98$), which corresponds to 
 
 | Quantile | $\varepsilon$ | Acceptance rate | Proposals per accept |
 | -------- | ------------- | --------------- | -------------------- |
-| 20%      | ~4.4          | ~20%            | ~5                   |
+| 20%      | ~4.2          | ~20%            | ~5                   |
 | 10%      | ~2.8          | ~10%            | ~10                  |
 | 1%       | ~0.98         | ~1%             | ~100                 |
-| 0.5%     | ~0.72         | ~0.5%           | ~200                 |
+| 0.5%     | ~0.73         | ~0.5%           | ~200                 |
 
 ### Results
 
@@ -98,8 +104,8 @@ Varying $s$ barely changes the posterior. A wider prior just lowers the acceptan
 
 | Value of s | Acceptance rate |
 | :--------: | :-------------: |
-|    0.3    |      3,39%      |
-|    1.0    |      1,00%      |
+|    0.3    |      3.34%      |
+|    1.0    |      1.02%      |
 |    3.0    |      0.35%      |
 
 Varying $t$ matters a lot more. When $t = 0.3$, the prior is so tight around $\sigma^2 = 1$ that almost no mass reaches the true region near $0.09$. Only 11 draws were accepted, which is close to a failure. When $t = 3.0$, the prior finally covers the truth, the acceptance rate goes up, and the posterior moves much closer to $\sigma_0^2 = 0.09$.
@@ -120,7 +126,7 @@ The Monte Carlo standard deviations across runs are tiny compared with the gap b
 ![Posterior check](Reject_ABC_plots/posterior_check.png)
 *Figure 7: Checking the posterior distribution*
 
-Samples from the ABC posterior, when used to simulate new datasets, produce data that is centered roughly right but visibly more spread out than $y^\star$. The observed standard deviation is about 1.01 while the mean replicated one is about 1.59. This overdispersion confirms that the posterior is still placing too much mass on large $\sigma^2$ values.
+Samples from the ABC posterior, when used to simulate new datasets, produce data that is centered roughly right but visibly more spread out than $y^\star$. The observed standard deviation is about 1.01 while the mean replicated one is about 1.65. This overdispersion confirms that the posterior is still placing too much mass on large $\sigma^2$ values.
 
 ---
 
