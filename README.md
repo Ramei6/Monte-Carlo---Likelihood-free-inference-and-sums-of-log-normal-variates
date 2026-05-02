@@ -296,7 +296,7 @@ Overall, MCMC-ABC has qualitatively a similar behavior to Reject-ABC. But the ma
 After studying the behavior of MCMC-ABC, it is useful to compare it directly with Reject-ABC on the same tolerance grid:
 
 $$
-\varepsilon \in \{0.5,\ 0.7,\ 1.0,\ 1.5,\ 2.0,\ 3.0\}.
+\varepsilon \in \left\{0.5,\ 0.7,\ 1.0,\ 1.5,\ 2.0,\ 3.0\right\}.
 $$
 
 Both algorithms are run on the same observed datasets, so the comparison is fair. The goal here is not only to know which method is faster, but also to understand what we gain or lose when replacing the simple rejection scheme by a Markov chain.
