@@ -278,10 +278,11 @@ With the number of chains fixed, runtime grows roughly linearly with $N_{\mathrm
 Overall, MCMC-ABC is a clear improvement over Reject-ABC because it reuses past good states instead of drawing fresh proposals from the prior every time. But the main lesson from the scans is that the qualitative roles of the tuning parameters are different. $\varepsilon$ is the main accuracy-efficiency trade-off: larger values improve acceptance but increase bias and posterior width. $\delta$ mainly controls mixing and should be tuned near the region where acceptance stays around 20–25%. Finally, prior sensitivity is driven much more by $t$ than by $s$. In this problem, the method works reasonably well for $\mu$, but inference on $\sigma$ remains the harder part and stays sensitive to both the ABC tolerance and the prior on $\log(\sigma^2)$.
 
 ---
-
+ 
 ## Question 3 — Exact Gibbs Sampler via Data Augmentation
 
 *The code for this section can be found in `exact_sampler.ipynb`.*
+
 
 ### Mathematical Justification
 
@@ -313,21 +314,68 @@ We draw $\sigma^2 \sim \mathrm{IG}(a_n, b_n)$ then $\mu \mid \sigma^2 \sim \math
 
 Because the indicator is making sure that $\sum_\ell e^{X_{i,\ell}} = Y_i$, we cannot update $X_{i,\ell}$ coordinates independently as the equality would not be true anymore. For each observation $i$, we randomly pick a pair $(\ell, \ell')$ and propose an update that preserves the constraint exactly. Defining the invariant sum $s = e^{X_{i,\ell}} + e^{X_{i,\ell'}}$ and the unconstrained difference $\delta = X_{i,\ell} - X_{i,\ell'}$, we propose:
 
-$$
-\delta^{\mathrm{new}} \sim \mathcal{N}(\delta^{\mathrm{curr}},\, \tau^2)
-$$
+$$\delta^{\mathrm{new}} \sim \mathcal{N}(\delta^{\mathrm{curr}},\, \tau^2)$$
 
 and recover the constrained coordinates using the softplus function:
 
-$$
-X_\ell^{\mathrm{new}} = \log s - \mathrm{softplus}(-\delta^{\mathrm{new}}), \qquad X_{\ell'}^{\mathrm{new}} = \log s - \mathrm{softplus}(\delta^{\mathrm{new}})
-$$
+$$X_\ell^{\mathrm{new}} = \log s - \mathrm{softplus}(-\delta^{\mathrm{new}}), \qquad X_{\ell'}^{\mathrm{new}} = \log s - \mathrm{softplus}(\delta^{\mathrm{new}})$$
 
 The MH acceptance ratio simplifies and eventually, the Gaussian log-prior ratio is:
 
-$$
-\log \alpha = -\frac{(X_\ell^{\mathrm{new}} - \mu)^2 + (X_{\ell'}^{\mathrm{new}} - \mu)^2}{2\sigma^2} + \frac{(X_\ell - \mu)^2 + (X_{\ell'} - \mu)^2}{2\sigma^2}
-$$
+$$\log \alpha = -\frac{(X_\ell^{\mathrm{new}} - \mu)^2 + (X_{\ell'}^{\mathrm{new}} - \mu)^2}{2\sigma^2} + \frac{(X_\ell - \mu)^2 + (X_{\ell'} - \mu)^2}{2\sigma^2}$$
+
+---
+
+### Implementation
+
+**Initialization.**
+
+The chain must start on the constraint space $\{\sum_\ell e^{X_{i,\ell}} = Y_i\}$. We initialize with $X_{i,\ell}^{(0)} = \log(Y_i / L)$, which satisfies the constraint exactly by construction.
+
+**Hyperparameter calibration.**
+
+Rather than fixing arbitrary hyperparameters, we calibrate them empirically from the data: $m_0 = \overline{\log(Y/L)}$, $\kappa_0 = 1$, $a_0 = 2$, $b_0 = \mathrm{Var}(\log(Y/L))$. This places the prior near the data without being informative.
+
+**Some details about our implementation** 
+
+- Exponentiating large $X$ values risks overflow. The invariant sum is therefore computed as $\log s = \mathrm{logsumexp}(X_\ell, X_{\ell'})$, and the back-projection uses the softplus function throughout, so that all arithmetic stays in the log domain.
+
+- The $n$ observations are conditionally independent given $\theta$. We use `jax.vmap` to run the pairwise MH kernel over all $n$ observations simultaneously, replacing a Python loop with a single batch operation.
+
+- To reduce autocorrelation of the $X$ chain between $\theta$ updates, we run $K = 10$ pairwise MH sub-steps per Gibbs iteration. The step-size $\tau = 0.5$ was calibrated manually to obtain acceptance rates in the 30–70% range.
+
+- The first 20% of iterates are discarded. All credible intervals are computed from the remaining post-burn-in draws.
+
+---
+
+### Results
+
+With $n = 10\,000$, $L = 10$, $\mu_0 = 0$, $\sigma_0^2 = 0.09$, 3 000 iterations and $K = 10$ sub-steps, the sampler recovers:
+
+| Parameter | Truth | Posterior median | 95% confidence Interval |
+|-----------|-------|------------------|-----------------------|
+| $\mu$     | 0.00  | ≈ 0.000          | tight, covers truth   |
+| $\sigma^2$| 0.09  | ≈ 0.090          | tight, covers truth   |
+
+Unlike ABC, there is no approximation $\varepsilon$: the sampler targets the exact posterior, without any bias. The confidence intervals center directly on the true parameter values.
+
+![Trace plots](Exact_Sampler_plots/trace_plots.png)
+*Figure 1: Trace Plots.*
+
+Trace plots show rapid mixing for $\mu$ and good mixing for $\sigma^2$ once the chain leaves the initialization. The post-burn-in traces are stationary with no visible trend.
+
+![Posterior Hist](Exact_Sampler_plots/posterior_hists.png)
+*Figure 2: Posterior of the distribution.*
+
+Posterior histograms are concentrated around the truth (much tighter than the ABC posteriors at any value of $\varepsilon$), and without the bias on $\sigma^2$ that ABC was suffering of due to prior misspecification and finite tolerance.
+
+**Computational cost.**
+
+Each Gibbs iteration runs in fully vectorized way over all $n$ observations. The dominant cost is the $nK$ pairwise MH proposals per iteration. However, in practice, this is fast enough for $n = 10\,000$ in a few minutes on CPU.
+
+**Sensitivity to $\tau$.** 
+
+The step-size $\tau$ controls the mixing of Block 2. If $\tau$ is too small, it gives high acceptance but the exploration is slower. Also, a too large $\tau$ gives low acceptance and poor mixing. The value $\tau = 0.5$ was chosen to balance these effects and can be tuned using pilot runs if needed.
 
 ---
 
