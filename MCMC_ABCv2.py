@@ -9,13 +9,13 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from functools import partial
 
-# ─── Hyperparamètres globaux ──────────────────────────────────────────────────
+# Hyperparamètres globaux
 L       = 10        # nombre de log-normales par observation
 M_OBS   = 1000      # taille du jeu de données observé
 M_SIM   = 1000      # taille du jeu simulé à chaque étape MH
 TRUE_MU    = 0.0    # vraie valeur de mu
 TRUE_SIGMA = 0.3    # vraie valeur de sigma
-K_MEWE = 20         # Nombre de datasets à similer pour calcul de la MEWE
+K_MEWE = 20         # Nombre de datasets à simuler pour calcul de la MEWE
 
 # Prior : mu ~ N(0, s^2),  log(sigma^2) ~ N(0, t^2)
 S_PRIOR = 1.0
@@ -25,54 +25,38 @@ T_PRIOR = 1.0
 N_CHAINS  = 5       # nombre de chaînes parallèles (vmappées)
 N_BURN    = 8_000   # longueur du burn-in
 N_ITER    = 40_000  # longueur post-burn-in
-K_THIN    = 100       # facteur de thinning
+K_THIN    = 100     # facteur de thinning
 
-EPSILON   = 1.5     # tolérance ABC (à calibrer via pilot run)
-DELTA      = 0.3   # std de la marche aléatoire sur mu et log(sigma)
+EPSILON   = 1.5     # tolérance ABC
+DELTA     = 0.3     # std de la marche aléatoire sur mu et log(sigma)
 
 # ─── 0. Génération des données "observées" ───────────────────────────────────
 
 def generate_observed_data(key, mu, sigma, m, l):
     """Génère m observations Yi = sum_l exp(Xi,l) avec Xi,l ~ N(mu, sigma^2)."""
-    X = jax.random.normal(key, shape=(m, l))         # shape (m, L)
-    return jnp.sum(jnp.exp(mu + sigma * X), axis=1)  # shape (m,)
+    X = jax.random.normal(key, shape=(m, l))         # dim (m, L)
+    return jnp.sum(jnp.exp(mu + sigma * X), axis=1)  # dim (m,)
 
 key_master = jax.random.PRNGKey(42)
 key_obs, key_run = jax.random.split(key_master)
 Y_OBS = generate_observed_data(key_obs, TRUE_MU, TRUE_SIGMA, M_OBS, L)
-Y_OBS_sorted = jnp.sort(Y_OBS)   # pré-tri pour W1 efficace
+Y_OBS_sorted = jnp.sort(Y_OBS)   # pré-tri pour W1
 
 
 def mewe(y_obs_sorted, y_sim):
-    """
-    Calcule MEWE entre y_obs et K datasets simulés y_sim.
-    
-    Args:
-        y_obs_sorted : array (m,) — données observées triées
-        y_sim        : array (k, m) — K datasets simulés non triés
-    Returns:
-        scalaire JAX : MEWE (moyenne des K distances W1)
-    """
+    """Calcule MEWE entre y_obs et K datasets simulés y_sim."""
     # Trier chacun des K datasets
-    y_sim_sorted = jnp.sort(y_sim, axis=1)  # shape (k, m)
+    y_sim_sorted = jnp.sort(y_sim, axis=1)  # dim (k, m)
     
-    # Calculer W1 pour chaque dataset (moyenne des différences)
-    W1_distances = jnp.mean(jnp.abs(y_obs_sorted - y_sim_sorted), axis=1)  # shape (k,)
+    # Calculer W1 pour chaque dataset (moyenne des différences post-tri)
+    W1_distances = jnp.mean(jnp.abs(y_obs_sorted - y_sim_sorted), axis=1)  # dim (k,)
     
     # Retourner la moyenne sur les K distances
     return jnp.mean(W1_distances)
 
 
 def log_prior(theta, s=S_PRIOR, t=T_PRIOR):
-    """
-    Log-prior pour theta = (mu, sigma).
-
-    Args:
-        theta : array (2,)
-        s, t  : hyperparamètres du prior
-    Returns:
-        scalaire JAX
-    """
+    """Log-prior pour theta = (mu, sigma)"""
     mu, sigma = theta[0], theta[1]
     lp_mu    = -0.5 * (mu / s) ** 2                    # cste ignorée car n'apparaissent pas dans leur ratio
     lp_lsig2 = -0.5 * (2.0 * jnp.log(sigma) / t) ** 2
@@ -80,30 +64,19 @@ def log_prior(theta, s=S_PRIOR, t=T_PRIOR):
 
 
 def simulate(key, theta, m_sim=M_SIM, l=L, k_mewe=K_MEWE):
-    """
-    Simule k_mewe datasets de m_sim observations sous le modèle paramétré par theta.
-    
-    Args:
-        key       : clé JAX PRNG
-        theta     : array (2,) ([mu, sigma])
-        m_sim     : nombre d'observations simulées par dataset (défaut : M_SIM = 1000)
-        l         : nombre de log-normales par observation
-        k_mewe    : nombre de datasets indépendants à générer
-    Returns:
-        y_sim : array (k_mewe, m_sim) — K datasets indépendants simulés
-    """
+    """Simule k_mewe datasets de m_sim observations sous le modèle paramétré par theta."""
     mu, sigma = theta[0], theta[1]
     X = mu + sigma * jax.random.normal(key, shape=(k_mewe, m_sim, l))
-    return jnp.sum(jnp.exp(X), axis=2)  # Sum over l dimension → shape (k_mewe, m_sim)
+    return jnp.sum(jnp.exp(X), axis=2)  # Somme sur la dimension l => dim (k_mewe, m_sim)
 
 
 
-# ─── Proposition (marche aléatoire sur (mu, log sigma)) ──────────────────────
+# Proposition (marche aléatoire sur (mu, log sigma))
 # cf. make_proposal dans le RWMH du cours.
 
 def propose(key, theta, delta=DELTA):
     """
-    Propose theta' par marche aléatoire gaussienne sur (mu, log sigma).
+    Propose theta* par marche aléatoire gaussienne sur (mu, log sigma).
     Proposal symétrique donc le ratio q s'annule dans h.
     """
     mu, sigma = theta[0], theta[1]
@@ -142,7 +115,7 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SI
         # Calcul de la distance
         d = mewe(y_obs_sorted, y_sim)
 
-        # Acceptation ou rejet
+        # Acceptation ou rejet (2 conditions)
         eps_accept = (d <= epsilon)
         log_h = log_prior(theta_new, s, t) - log_prior(theta_curr, s, t)
         log_u = jnp.log(jax.random.uniform(key_acc))
@@ -150,15 +123,13 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, s=S_PRIOR, t=T_PRIOR, m_sim=M_SI
         theta_curr = jnp.where(accept, theta_new, theta_curr)
         n_accepted = n_accepted + jnp.where(accept, 1, 0)
 
-        # On garde en mémoire (toujours, même si rejeté. cf. Marjoram)
+        # On garde en mémoire (toujours, même si rejeté)
         samples = samples.at[i].set(theta_curr)
 
         return samples, theta_curr, key, n_accepted, epsilon, delta
 
     def mcmc_abc_single(key, theta0, epsilon, delta, n_total=N_BURN + N_ITER):
-        """
-        Lance une chaîne MCMC-ABC de longueur n_total depuis theta0.
-        """
+        """Lance une chaîne MCMC-ABC de longueur n_total depuis theta0."""
         samples  = jnp.zeros((n_total, 2))
         samples  = samples.at[0].set(theta0)
         n_acc    = jnp.array(0)
@@ -201,8 +172,8 @@ def run_all_chains(mcmc_abc_single, key, theta0, epsilon, delta, n_chains=N_CHAI
     Lance N_CHAINS chaînes en parallèle via vmap.
 
     Returns:
-        chains_post : array (n_chains, n_iter, 2) — après burn-in
-        acc_rates   : array (n_chains,) — taux d'acceptation par chaîne
+        chains_post : array (n_chains, n_iter, 2)  (après burn-in)
+        acc_rates   : array (n_chains,) (taux d'acceptation par chaîne)
     """
     subkeys = jax.random.split(key, n_chains)
 
@@ -211,21 +182,13 @@ def run_all_chains(mcmc_abc_single, key, theta0, epsilon, delta, n_chains=N_CHAI
     # Lancer toutes les chaînes en parallèle
     all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0, epsilon, delta, n_burn + n_iter)
 
-    chains_post = all_samples[:, n_burn:, :]   # shape (n_chains, n_iter, 2)
+    chains_post = all_samples[:, n_burn:, :]   # dim (n_chains, n_iter, 2)
 
     return chains_post, all_acc_rates
 
 
-def compute_acf(x, max_lag=100): # Adapter aussi plot_result()
-    """
-    Calcule l'ACF empirique de la série x jusqu'au lag max_lag.
-
-    Args:
-        x       : array 1D (n,)
-        max_lag : int
-    Returns:
-        acf : array (max_lag,)
-    """
+def compute_acf(x, max_lag=100): # Si changement, adapter aussi plot_result()
+    """Calcule l'ACF empirique de la série x jusqu'au lag max_lag."""
 
     acf = jnp.zeros(shape=(max_lag,))
     n = len(x)
@@ -236,14 +199,14 @@ def compute_acf(x, max_lag=100): # Adapter aussi plot_result()
     return acf
 
 
-# ─── Visualisation des résultats ─────────────────────────────────────────────
+# Visualisation des résultats
 
 def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
                  true_mu=TRUE_MU, true_sigma=TRUE_SIGMA):
     """
-    Produit 4 figures de diagnostic :
-      1. Trace plots (toutes les chaînes, mu et sigma)
-      2. ACF (chaîne 0, mu et sigma)
+    Produit 4 plots de résultats :
+      1. Trace plots
+      2. ACF
       3. Posterior marginals : histogrammes + boxplots + IC 95%
       4. Taux d'acceptation par chaîne
     """
@@ -259,7 +222,7 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
                  fontsize=13, fontweight="bold")
     gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.35)
 
-    # ── 1. Trace plots ────────────────────────────────────────────────────────
+    # Trace plots
     ax_tr_mu  = fig.add_subplot(gs[0, 0])
     ax_tr_sig = fig.add_subplot(gs[0, 1])
     for c in range(n_chains):
@@ -272,7 +235,7 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
         ax.set_xlabel("Itération (thinning ×20)")
         ax.legend(fontsize=8)
 
-    # ── 2. ACF ────────────────────────────────────────────────────────────────
+    # ACF
     ax_acf_mu  = fig.add_subplot(gs[1, 0])
     ax_acf_sig = fig.add_subplot(gs[1, 1])
     lags = np.arange(1, 101)
@@ -288,7 +251,7 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
         ax.set_xlabel("Lag")
         ax.legend(fontsize=8)
 
-    # ── 3. Posterior : histogramme + boxplot + IC 95% ─────────────────────────
+    # Posterior : histogramme + boxplot + IC 95%
     ax_post_mu  = fig.add_subplot(gs[2, 0])
     ax_post_sig = fig.add_subplot(gs[2, 1])
     for ax, samples, name, true in [
@@ -303,7 +266,7 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
         ax.axvline(q_mean, color="crimson", lw=1.5, label=f"Moyenne ({q_mean:.3f})")
         ax.axvspan(q025, q975, alpha=0.15, color="crimson",
                    label=f"IC 95% [{q025:.3f}, {q975:.3f}]")
-        ax.set_title(f"Posterior marginal — {name}  (thinning ×{k_thin})")
+        ax.set_title(f"Posterior marginal : {name}  (thinning ×{k_thin})")
         ax.set_xlabel(name)
         ax.legend(fontsize=7)
         # Statistiques textuelles
@@ -320,19 +283,13 @@ def plot_results(chains_post, acc_rates, epsilon, k_thin=K_THIN,
 
 
 def plot_sensitivity_epsilon(results_by_eps, true_mu=TRUE_MU, true_sigma=TRUE_SIGMA):
-    """
-    Boxplots des posteriors de mu et sigma pour différentes valeurs de epsilon.
-    Essentiel pour la comparaison avec Reject-ABC (Question 4 du sujet).
-
-    Args:
-        results_by_eps : dict { epsilon : (flat_mu, flat_sigma) }
-    """
+    """Boxplots des posteriors de mu et sigma pour différentes valeurs de epsilon."""
     epsilons = sorted(results_by_eps.keys())
     data_mu    = [results_by_eps[e][0] for e in epsilons]
     data_sigma = [results_by_eps[e][1] for e in epsilons]
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle("Sensibilité au choix de ε — MCMC-ABC", fontweight="bold")
+    fig.suptitle("Sensibilité au choix de ε (MCMC-ABC)", fontweight="bold")
 
     for ax, data, name, true in [
         (axes[0], data_mu,    "μ",    true_mu),
@@ -356,34 +313,34 @@ def plot_sensitivity_epsilon(results_by_eps, true_mu=TRUE_MU, true_sigma=TRUE_SI
 
 
 
-# ─── Script principal ─────────────────────────────────────────────────────────
+# Script principal
 
 if __name__ == "__main__":
 
-    print("=== MCMC-ABC (Marjoram et al., 2003) — JAX ===\n")
+    print("=== MCMC-ABC ===\n")
     print(f"Données observées : {M_OBS} obs, L={L}, mu={TRUE_MU}, sigma={TRUE_SIGMA}")
     print(f"ε = {EPSILON},  {N_CHAINS} chaînes,  {N_BURN} burn-in + {N_ITER} iter\n")
 
-    # 1. Initialisation valide
-    print("Recherche d'un theta0 valide...")
+    # Initialisation valide
+    print("Recherche d'un theta0 valide")
     theta0, key_run = find_valid_init(key_run, Y_OBS_sorted, EPSILON)
     print(f"theta0 = (mu={float(theta0[0]):.3f}, sigma={float(theta0[1]):.3f})\n")
 
-    # 2. Construction de la chaîne
+    # Construction de la chaîne
     mcmc_abc_single = make_mcmc_abc(Y_OBS_sorted, EPSILON, DELTA)
 
-    # 3. JIT + lancement (le premier appel compile — prend ~30s)
-    print("Compilation et lancement des chaînes (vmap + jit)...")
+    # JIT + lancement (le premier appel compile, donc plus long)
+    print("Compilation et lancement des chaînes (vmap + jit)")
     chains_post, acc_rates = run_all_chains(
         mcmc_abc_single, key_run, theta0, EPSILON, DELTA
     )
     print(f"Taux d'acceptation par chaîne : {np.array(acc_rates)}")
     print(f"Taux moyen : {float(jnp.mean(acc_rates)):.3f}\n")
 
-    # 4. Diagnostics visuels
+    # Plots
     plot_results(chains_post, acc_rates, EPSILON)
 
-    # 5. Analyse de sensibilité à epsilon
+    # Analyse de sensibilité à epsilon
     print("\n=== Analyse de sensibilité à ε ===")
     results_by_eps = {}
     for eps in [0.5, 1.0, 1.5, 2.5]:
