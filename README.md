@@ -290,6 +290,37 @@ With the number of chains fixed, runtime grows roughly linearly. With `vmap` (ja
 
 Overall, MCMC-ABC has qualitatively a similar behavior to Reject-ABC. But the main lesson from the scans is that the roles of the new tuning parameters (introduce by the chains) are different. $\varepsilon$ is the main accuracy-efficiency trade-off: larger values improve acceptance but increase bias and posterior width. $\delta$ mainly controls mixing and should be tuned near the region where acceptance stays around 20–25%. Finally, prior sensitivity is driven much more by $t$ than by $s$. In this problem, the method works reasonably well for $\mu$, but inference on $\sigma$ remains the hardest part and stays sensitive to both the ABC tolerance and the prior on $\log(\sigma^2)$.
 
+
+### Direct comparison with Reject-ABC
+
+After studying the behavior of MCMC-ABC, it is useful to compare it directly with Reject-ABC on the same tolerance grid:
+
+$$
+\varepsilon \in \{0.5,\ 0.7,\ 1.0,\ 1.5,\ 2.0,\ 3.0\}.
+$$
+
+Both algorithms are run on the same observed datasets, so the comparison is fair. The goal here is not only to know which method is faster, but also to understand what we gain or lose when replacing the simple rejection scheme by a Markov chain.
+
+![Reject-ABC vs MCMC-ABC benchmark](benchmark_results/benchmark2_plots.png)
+
+*Figure: Benchmark comparison between Reject-ABC and MCMC-ABC across several values of $\varepsilon$.*
+
+Reject-ABC is much more sensitive to $\varepsilon$. At $\varepsilon = 0.5$, it takes about $66.5$ seconds, while MCMC-ABC takes about $16.0$ seconds. This happens because Reject-ABC proposes directly from the prior, so when the ABC tolerance is strict, most proposals are rejected. When $\varepsilon$ increases, Reject-ABC becomes much faster and reaches only about $2.2$ seconds at $\varepsilon = 3.0$, simply because the acceptance condition is easier.
+
+MCMC-ABC has a more stable runtime, around $13$ to $17$ seconds. This is because the number of burn-in and sampling iterations is fixed. Changing $\varepsilon$ changes the acceptance rate, but not the total number of iterations.
+
+The acceptance rates confirm this difference. Reject-ABC accepts almost nothing for small $\varepsilon$, and only reaches about $12\%$ at $\varepsilon = 3.0$. MCMC-ABC accepts much more often: about $13\%$ at $\varepsilon = 0.5$, $26\%$ at $\varepsilon = 1.0$, and more than $60\%$ at $\varepsilon = 3.0$. This is because MCMC-ABC proposes locally around the current parameter, while Reject-ABC restarts from the prior each time.
+
+However, higher acceptance is not necessarily better. With large $\varepsilon$, the ABC condition is looser, so the algorithm accepts more simulations that are not very close to the observed data. This improves speed, but worsens the approximation.
+
+This is visible in the posterior means. For a fixed $\varepsilon$, both algorithms give very similar estimates, so they seem to target the same ABC posterior. But as $\varepsilon$ increases, the posterior means move away from the truth: $\mu$ goes from about $-0.03$ to about $-0.27$, while the true value is $0$, and $\sigma^2$ goes from about $0.14$ to more than $0.55$, while the true value is $0.09$.
+
+So the main issue is not the choice between Reject-ABC and MCMC-ABC. The visible bias mainly comes from the finite ABC tolerance. This is also consistent with the prior sensitivity results above, where the prior on $\log(\sigma^2)$ had an important effect on the variance estimate.
+
+Finally, ESS per second gives another view of the comparison. For large $\varepsilon$, Reject-ABC becomes very efficient because its accepted draws are independent and it finishes quickly. MCMC-ABC is limited by the correlation between consecutive samples. Still, MCMC-ABC is more useful for small $\varepsilon$, where Reject-ABC is too slow.
+
+Overall, MCMC-ABC improves computation when the tolerance is strict, but it does not remove the ABC bias caused by $\varepsilon$. In this benchmark, $\varepsilon \approx 1.0$ seems to be the best compromise: both methods have similar runtime, the acceptance rate is reasonable, and the bias is still much smaller than for $\varepsilon = 2.0$ or $\varepsilon = 3.0$.
+
 ---
  
 ## Question 3 — Exact Gibbs Sampler via Data Augmentation
