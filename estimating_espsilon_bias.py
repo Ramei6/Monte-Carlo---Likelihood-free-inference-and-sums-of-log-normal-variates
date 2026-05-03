@@ -20,6 +20,7 @@ TRUE_SIG2  = TRUE_SIGMA ** 2   # 0.09  — espace Gibbs
 L     = 10
 M_OBS = 1_000
 M_SIM = M_OBS
+K_MEWE = 20
  
 S_PRIOR = 1.0
 T_PRIOR = 1.0
@@ -75,18 +76,16 @@ T_PRIOR = 1.0
 
 
 
-def wasserstein1(y_obs_sorted, y_sim):
-    """
-    Calcule W1 entre y_obs (déjà trié) et y_sim (non trié).
-
-    Args:
-        y_obs_sorted : array (m,) (données observées triées)
-        y_sim        : array (m,) (données simulées non triées)
-    Returns:
-        scalaire JAX : distance W1
-    """
-    y_sim_sorted = jnp.sort(y_sim)
-    return jnp.mean(jnp.abs(y_obs_sorted - y_sim_sorted))
+def mewe(y_obs_sorted, y_sim):
+    """Calcule MEWE entre y_obs et K datasets simulés y_sim."""
+    # Trier chacun des K datasets
+    y_sim_sorted = jnp.sort(y_sim, axis=1)  # dim (k, m)
+    
+    # Calculer W1 pour chaque dataset (moyenne des différences post-tri)
+    W1_distances = jnp.mean(jnp.abs(y_obs_sorted - y_sim_sorted), axis=1)  # dim (k,)
+    
+    # Retourner la moyenne sur les K distances
+    return jnp.mean(W1_distances)
 
 
 def log_prior(theta, s=S_PRIOR, t=T_PRIOR):
@@ -105,21 +104,11 @@ def log_prior(theta, s=S_PRIOR, t=T_PRIOR):
     return lp_mu + lp_lsig2 
 
 
-def simulate(key, theta, m_sim=M_SIM, l=L):
-    """
-    Simule m_sim observations sous le modèle paramétré par theta.
-
-    Args:
-        key   : clé JAX PRNG
-        theta : array (2,) ([mu, sigma])
-        m_sim : nombre d'observations simulées
-        l     : nombre de log-normales par observation
-    Returns:
-        y_sim : array (m_sim,) — données simulées
-    """
+def simulate(key, theta, m_sim=M_SIM, l=L, k_mewe=K_MEWE):
+    """Simule k_mewe datasets de m_sim observations sous le modèle paramétré par theta."""
     mu, sigma = theta[0], theta[1]
-    X = mu + sigma * jax.random.normal(key, shape=(m_sim, l))
-    return jnp.sum(jnp.exp(X), axis=1)     # Somme sur les colonnes
+    X = mu + sigma * jax.random.normal(key, shape=(k_mewe, m_sim, l))
+    return jnp.sum(jnp.exp(X), axis=2)  # Somme sur la dimension l => dim (k_mewe, m_sim)
 
 
 
@@ -165,7 +154,7 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, m_sim=M_SIM, l=L):
         y_sim = simulate(key_sim, theta_new, m_sim, l)
 
         # Calcul de la distance
-        d = wasserstein1(y_obs_sorted, y_sim)
+        d = mewe(y_obs_sorted, y_sim)
 
         # Acceptation ou rejet
         eps_accept = (d <= epsilon)
@@ -199,7 +188,6 @@ def make_mcmc_abc(y_obs_sorted, epsilon, delta, m_sim=M_SIM, l=L):
     return mcmc_abc_single
 
 
-# FONCTION TEMPO: petit ABC à l'avenir
 def find_valid_init(key, y_obs_sorted, epsilon, n_tries=10_000,
                     s=S_PRIOR, t=T_PRIOR):
     """
@@ -216,7 +204,7 @@ def find_valid_init(key, y_obs_sorted, epsilon, n_tries=10_000,
         theta_try = jnp.array([mu_try, sigma_try])
         # Simulation et distance
         y_try = simulate(k3, theta_try)
-        d     = wasserstein1(y_obs_sorted, y_try)
+        d     = mewe(y_obs_sorted, y_try)
         if float(d) <= epsilon:
             return theta_try, key
     raise RuntimeError(
