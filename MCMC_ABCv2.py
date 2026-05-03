@@ -22,7 +22,7 @@ S_PRIOR = 1.0
 T_PRIOR = 1.0
 
 # Chaîne MCMC
-N_CHAINS  = 5       # nombre de chaînes parallèles (vmappées)
+N_CHAINS  = 1       # nombre de chaînes parallèles (vmappées)
 N_BURN    = 8_000   # longueur du burn-in
 N_ITER    = 40_000  # longueur post-burn-in
 K_THIN    = 100     # facteur de thinning
