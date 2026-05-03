@@ -256,30 +256,25 @@ Some elements from these curves:
 
 ### Effect of $s$ and $t$
 
-We scan a $1 \times 1$ grid of $(s, t)$ values.
+We scan a $10 \times 10$ grid of $(s, t)$ values. For computational time reasons, the scan presented relies on a single chain, which has been run on a single dataset.
 
 ![Prior sensitivity heatmaps](MCMC-ABC_plots/scan_prior_heatmaps.png)
-*Figure 5: Bias on $\sigma$ and ESS ratio over the full $(s,t)$ grid. The vertical structure (columns nearly uniform) shows that $s$ barely matters; the horizontal structure (rows vary strongly) shows that $t$ dominates.*
+*Figure 5: Heatmaps over the full $(s,t)$ grid. The vertical structure (columns nearly uniform) shows that $s$ barely matters; the horizontal structure (rows vary strongly) shows that $t$ dominates.*
 
 ![Prior sensitivity 1D cuts](MCMC-ABC_plots/scan_prior_coupes1D.png)
 *Figure 6: 1D cross-sections of the scan on (s,t)*
 
-**Effect of $s$ (width of prior on $\mu$).** The bias and ESS ratio are nearly flat across all tested $s$ values. A wider prior just sends more proposals to extreme $\mu$ values and slightly lowers the acceptance rate, but the posterior summaries barely change because the data already concentrates the posterior near the truth. This is exactly the same finding as in Q1.
+**Effect of $s$ (width of prior on $\mu$).** 
 
-**Effect of $t$ (width of prior on $\log \sigma^2$).** $t$ has a much stronger effect:
+The bias and ESS ratio are nearly flat across all tested $s$ values. The posterior summaries barely change because the data already concentrates the posterior near the truth. This is exactly the same finding as in Q1.
 
-| $t$ | Acceptance rate | Bias $\sigma$ |
-| --- | --- | --- |
-| 0.10 | 0.023% | +0.214 |
-| 0.36 | 1.1% | +0.179 |
-| 0.89 | 5.9% | +0.110 |
-| **1.68** | **9.9%** | **+0.029** ← baseline |
-| 2.21 | 10.8% | −0.012 |
-| 3.00 | 11.3% | −0.046 |
+**Effect of $t$ (width of prior on $\log \sigma^2$).** 
 
-At $t = 0.1$ the prior on $\log \sigma^2$ is so tight around $\sigma^2 = 1$ that it barely covers the true $\sigma_0^2 = 0.09$. The acceptance rate collapses to $0.023\%$ — the chain nearly fails — and the bias for $\sigma$ is $+0.214$. At $t = 1.68$ (baseline) the prior is wide enough that the likelihood drives the posterior, and the bias drops to $+0.029$. For very large $t$ the posterior slightly overshoots below the truth ($\mathrm{bias}_\sigma < 0$) because the prior now also covers small $\sigma$ values.
+$t$ has a much stronger effect:
 
-The conclusion is the same as Q1: $s$ **barely matters**, $t$ **matters a lot**.
+At $t = 0.1$ the prior on $\log \sigma^2$ is so tight around $\sigma^2 = 1$ that it barely covers the true $\sigma_0^2 = 0.09$. The acceptance rate collapses to $0.023\%$, meaning that the chain nearly fails. For greater values of $t$, the bias on both parameters decreases: the chain is able to explore more the space of parameters and ends up converging closer to their actual values. For similar reasons, the acceptance rate also increases with $t$.
+
+The conclusion is the same as Q1: $s$ **barely matters** whereas $t$ **matters a lot**.
 
 ### Computational scaling and conclusion
 
@@ -506,7 +501,7 @@ Now let's focus on the scale of the Bias introduced by **ε**:
 
 The results highlight a direct and continuous relationship between the tolerance **$\varepsilon$** and the estimation error. When **$\varepsilon$** is very small, the bias is almost zero, reflecting strong fidelity to the target distribution. However, as the tolerance widens, the mean absolute bias increases systematically. This degradation in precision does not affect the parameters equally: the error on the variance (**$\sigma^2$**) grows much more steeply and severely than that on the mean (**$\mu$**). In summary, relaxing the acceptance criterion **$\varepsilon$** inevitably deteriorates the inference, with a particularly marked penalty on the estimation of the data's dispersion.
 
-Furthermore, the growth of the bias is not strictly linear, but rather sub-linear (showing a logarithmic-like concavity). Interestingly, the trajectory of the bias curves mirrors the growth curve of the acceptance rate. This structural similarity highlights that the bias is inextricably linked to the acceptance probability: as the algorithm accepts a progressively larger fraction of the prior space, the estimation error grows following the same decelerating rate.
+Furthermore, the growth of the bias is not strictly linear, but rather sub-linear (showing a logarithmic-like concavity). Interestingly, the trajectory of the bias curves mirrors the growth curve of the acceptance rate. This similarity highlights that the bias is linked to the acceptance probability: as the algorithm accepts a progressively larger fraction of the prior space, the estimation error grows following the same decelerating rate.
 
 ![Posterior_shifting_other example](epsilon_comparison/figures/fig3_bias_per_dataset.png)
 *Figure 5: Individual Bias for all Datasets*
