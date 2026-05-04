@@ -22,7 +22,7 @@ S_PRIOR = 1.0
 T_PRIOR = 1.0
 
 # Chaîne MCMC
-N_CHAINS  = 1       # nombre de chaînes parallèles (vmappées)
+N_CHAINS  = 4       # nombre de chaînes parallèles (vmappées)
 N_BURN    = 8_000   # longueur du burn-in
 N_ITER    = 40_000  # longueur post-burn-in
 K_THIN    = 100     # facteur de thinning
@@ -166,7 +166,7 @@ def find_valid_init(key, y_obs_sorted, epsilon, n_tries=10_000,
     )
 
 
-def run_all_chains(mcmc_abc_single, key, theta0, epsilon, delta, n_chains=N_CHAINS,
+def run_all_chains(mcmc_abc_single, key, theta0s, epsilon, delta, n_chains=N_CHAINS,
                    n_burn=N_BURN, n_iter=N_ITER):
     """
     Lance N_CHAINS chaînes en parallèle via vmap.
@@ -178,9 +178,9 @@ def run_all_chains(mcmc_abc_single, key, theta0, epsilon, delta, n_chains=N_CHAI
     subkeys = jax.random.split(key, n_chains)
 
     # vmap uniquement sur les keys, pas les autres params.
-    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axes=(0, None, None, None, None))
+    mcmc_abc_vmap = jax.vmap(mcmc_abc_single, in_axes=(0, 0, None, None, None))
     # Lancer toutes les chaînes en parallèle
-    all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0, epsilon, delta, n_burn + n_iter)
+    all_samples, all_acc_rates = mcmc_abc_vmap(subkeys, theta0s, epsilon, delta, n_burn + n_iter)
 
     chains_post = all_samples[:, n_burn:, :]   # dim (n_chains, n_iter, 2)
 
@@ -321,10 +321,14 @@ if __name__ == "__main__":
     print(f"Données observées : {M_OBS} obs, L={L}, mu={TRUE_MU}, sigma={TRUE_SIGMA}")
     print(f"ε = {EPSILON},  {N_CHAINS} chaînes,  {N_BURN} burn-in + {N_ITER} iter\n")
 
-    # Initialisation valide
-    print("Recherche d'un theta0 valide")
-    theta0, key_run = find_valid_init(key_run, Y_OBS_sorted, EPSILON)
-    print(f"theta0 = (mu={float(theta0[0]):.3f}, sigma={float(theta0[1]):.3f})\n")
+    # Initialisation
+    print("Recherche d'un theta0 valide pour chaque chaine")
+    theta0_list = []
+    for _ in range(N_CHAINS):
+        key_run, key_init = jax.random.split(key_run)
+        theta0_i, _ = find_valid_init(key_init, Y_OBS_sorted, EPSILON)
+        theta0_list.append(theta0_i)
+    theta0s = jnp.stack(theta0_list)  # shape (n_chains, 2)
 
     # Construction de la chaîne
     mcmc_abc_single = make_mcmc_abc(Y_OBS_sorted, EPSILON, DELTA)
@@ -332,7 +336,7 @@ if __name__ == "__main__":
     # JIT + lancement (le premier appel compile, donc plus long)
     print("Compilation et lancement des chaînes (vmap + jit)")
     chains_post, acc_rates = run_all_chains(
-        mcmc_abc_single, key_run, theta0, EPSILON, DELTA
+        mcmc_abc_single, key_run, theta0s, EPSILON, DELTA
     )
     print(f"Taux d'acceptation par chaîne : {np.array(acc_rates)}")
     print(f"Taux moyen : {float(jnp.mean(acc_rates)):.3f}\n")
@@ -350,11 +354,16 @@ if __name__ == "__main__":
 
         # Recherche d'un theta0
         key_run, key_init = jax.random.split(key_run)
-        theta0_eps, _ = find_valid_init(key_init, Y_OBS_sorted, eps)
+        theta0_list = []
+        for _ in range(N_CHAINS):
+            key_run, key_init = jax.random.split(key_run)
+            theta0_i, _ = find_valid_init(key_init, Y_OBS_sorted, eps)
+            theta0_list.append(theta0_i)
+        theta0s_eps = jnp.stack(theta0_list)  # shape (N_CHAINS, 2)
 
         # Lancement des chaines
         key_run, key_chains = jax.random.split(key_run)
-        chains_eps, acc_eps = run_all_chains(mcmc_fn, key_chains, theta0_eps, eps, DELTA)
+        chains_eps, acc_eps = run_all_chains(mcmc_fn, key_chains, theta0s_eps, eps, DELTA)
         print(f"     Taux d'acceptation moyen : {float(jnp.mean(acc_eps)):.3f}")
 
         # Thinning
