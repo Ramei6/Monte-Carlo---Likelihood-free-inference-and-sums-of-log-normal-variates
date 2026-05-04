@@ -22,16 +22,16 @@ Because the density of $Y_i$ is intractable, we cannot evaluate the likelihood d
 
 ### Distance
 
-Following Bernton et al. (2017), we use a **MEWE-style averaged score**: for each proposed $\theta^*$, we simulate $K = 3$ independent fake datasets and average their 1-Wasserstein distances to the observed sample,
+Following Bernton et al. (2017), we use a **MEWE-style averaged score**: for each proposed $\theta'$, we simulate $K = 3$ independent fake datasets and average their 1-Wasserstein distances to the observed sample,
 
 $$
-\bar{W}_{1,K}(\theta^*) = \frac{1}{K}\sum_{k=1}^{K} W_1\!\left(y^{\mathrm{sim},(k)},\,y^\star\right),
+\bar{W}_{1,K}(\theta') = \frac{1}{K}\sum_{k=1}^{K} W_1\!\left(Y^{(k)}(\theta'),\,y^\star\right),
 $$
 
 where each 1-Wasserstein term is just the mean absolute gap between sorted samples,
 
 $$
-W_1(y^{\text{sim}}, y^\star) = \frac{1}{n}\sum_{i=1}^{n}\left|y^{\text{sim}}_{(i)} - y^\star_{(i)}\right|.
+W_1\!\left(Y^{(k)}(\theta'),\, y^\star\right) = \frac{1}{n}\sum_{i=1}^{n}\left|Y^{(k)}_{(i)}(\theta') - y^\star_{(i)}\right|.
 $$
 
 Averaging over $K$ replications reduces the Monte Carlo noise that comes from judging a proposal with a single fake sample. It compares the full empirical distributions rather than a few hand-picked summary statistics, which matters here because no single statistic clearly captures all the information.
@@ -53,10 +53,10 @@ The log-normal reparametrisation keeps $\sigma^2$ positive automatically.
 
 ```
 while number of accepted draws < N:
-    1. draw θ* = (μ*, σ²*) from the prior
-    2. for k = 1, ..., K: simulate Y*^(k)_1, ..., Y*^(k)_n under θ*
-    3. compute W̄_{1,K}(θ*) = (1/K) Σ_k W1(Y*^(k), y_obs)
-    4. if W̄_{1,K}(θ*) ≤ ε: keep θ*
+    1. draw θ' = (μ', σ²') from the prior
+    2. for k = 1, ..., K: simulate Y^(k)(θ') = (Y^(k)_1(θ'), ..., Y^(k)_n(θ')) under θ'
+    3. compute W̄_{1,K}(θ') = (1/K) Σ_k W1(Y^(k)(θ'), y*)
+    4. if W̄_{1,K}(θ') ≤ ε: keep θ'
 ```
 
 The accepted draws are i.i.d. samples from the ABC posterior.
@@ -157,17 +157,17 @@ The log-parametrisation keeps $\sigma^2 > 0$ automatically. The hyperparameters 
 The MCMC-ABC chain targets the augmented distribution
 
 $$
-\pi(\theta, y^{\mathrm{sim}}) \propto \pi(\theta)\;\mathbf{1}\!\left[W_1(y^{\mathrm{sim}}, y^\star) \leq \varepsilon\right],
+\pi(\theta, y^{\mathrm{aug}}) \propto \pi(\theta)\;\mathbf{1}\!\left[W_1(y^{\mathrm{aug}}, y^\star) \leq \varepsilon\right],
 $$
 
 whose marginal in $\theta$ is the ABC posterior. At each step we use a random-walk proposal on $(\mu, \log \sigma)$ with step size $\delta$:
 
 ```
-Given current state (theta, y_sim):
-  1. Propose theta* = theta + delta * xi,   xi ~ N(0, I_2)
-  2. Simulate 20 * y* under theta*
-  3. If MEWE(y*, y_obs) > epsilon: reject immediately
-  4. Otherwise accept theta* with probability min(1, pi(theta*) / pi(theta))
+Given current state (θ, y^aug):
+  1. Propose θ' = θ + δ · ξ,   ξ ~ N(0, I_2)
+  2. Simulate K_MEWE datasets Y^(k)(θ'), k = 1, ..., K_MEWE under θ'
+  3. If MEWE(θ', y*) > ε: reject immediately
+  4. Otherwise accept θ' with probability min(1, π(θ') / π(θ))
 ```
 
 So $\varepsilon$ controls the ABC approximation itself, while $\delta$ controls how far each proposal jumps from the current state. The first parameter mainly affects bias, the second mainly affects mixing.

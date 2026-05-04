@@ -9,8 +9,8 @@ Protocol
 * Both algorithms see the SAME y_obs within every rep.
 * JIT kernels are pre-compiled once before the timed loop.
 * For each (rep, ε):
-    - time Reject-ABC  →  record runtime, posterior means, acc rate, ESS
-    - time MCMC-ABC    →  same
+    - time Reject-ABC  ->  record runtime, posterior means, acc rate, ESS
+    - time MCMC-ABC    ->  same
 * Save raw records to CSV, then produce a 6-panel comparison figure.
 
 Key design choices
@@ -18,9 +18,6 @@ Key design choices
 * Both algorithms live in algorithms.py (clean alg1/alg2 interface).
 * Reject-ABC: K=1 (single simulation per proposal).
 * MCMC-ABC  : K=1 (single simulation per step), δ=0.2 (near-optimal from Q2).
-* ESS for Reject-ABC = n_keep (i.i.d. draws — by construction).
-* ESS for MCMC-ABC   = truncated-ACF estimate on the μ chain.
-* ESS/second is the primary efficiency metric.
 
 Outputs
 -------
@@ -34,8 +31,11 @@ import time
 import numpy as np
 import jax
 import matplotlib
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import matplotlib.ticker as mticker
 import pandas as pd
 
@@ -45,67 +45,55 @@ import algorithms
 os.makedirs("benchmark_results", exist_ok=True)
 
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-N_OBS    = 1_000
-R        = 3
+N_OBS = 1_000
+R = 3
 EPS_GRID = np.array([0.5, 0.7, 1.0, 1.5, 2.0, 3.0])
 
-# Reject-ABC settings
-N_KEEP   = algorithms.N_KEEP_REJ
+N_KEEP = algorithms.N_KEEP_REJ
 
-# MCMC-ABC settings
-DELTA    = algorithms.DELTA_MCMC
-N_BURN   = algorithms.N_BURN_MCMC
-N_ITER   = algorithms.N_ITER_MCMC
+DELTA = algorithms.DELTA_MCMC
+N_BURN = algorithms.N_BURN_MCMC
+N_ITER = algorithms.N_ITER_MCMC
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Benchmark loop
-# ═══════════════════════════════════════════════════════════════════════════════
 
 def run_benchmark() -> pd.DataFrame:
-    records   = []
+    records = []
     key_bench = jax.random.PRNGKey(2026)
 
     print("=" * 72)
-    print("  Benchmark: Reject-ABC  vs  MCMC-ABC  (K=1 for both)")
+    print("Benchmark: Reject-ABC vs MCMC-ABC")
     print("=" * 72)
-    print(f"  Model : Y_i = Σ exp(X_il),  L={algorithms.L},  n={N_OBS}")
-    print(f"  Truth : μ₀={algorithms.TRUE_MU},  σ₀²={algorithms.TRUE_SIGMA2}")
+    print(f"Model : Y_i = sum exp(X_il), L={algorithms.L}, n={N_OBS}")
+    print(f"Truth : mu0={algorithms.TRUE_MU}, sigma0^2={algorithms.TRUE_SIGMA2}")
     print(
-        f"  Prior : μ~N(0,{algorithms.S_PRIOR}²),  "
-        f"log σ²~N(0,{algorithms.T_PRIOR}²)"
+        f"Prior : mu~N(0,{algorithms.S_PRIOR}^2), "
+        f"log sigma2~N(0,{algorithms.T_PRIOR}^2)"
     )
-    print(f"  Reps  : R={R}")
-    print(f"  ε grid: {EPS_GRID}")
-    print(f"  Reject-ABC : n_keep={N_KEEP}  (ESS = n_keep, i.i.d. draws)")
+    print(f"Reps  : R={R}")
+    print(f"eps grid: {EPS_GRID}")
+    print(f"Reject-ABC : n_keep={N_KEEP}")
     print(
-        f"  MCMC-ABC   : n_burn={N_BURN}, n_iter={N_ITER}, δ={DELTA}  "
-        f"(ESS via truncated ACF)\n"
+        f"MCMC-ABC   : n_burn={N_BURN}, n_iter={N_ITER}, "
+        f"delta={DELTA}\n"
     )
 
-    # ── Pre-compile JAX kernels ──────────────────────────────────────────────
-    print("Warming up JIT (one MCMC chain compile + run — ~5-15 s)...")
+    print("Warming up JIT...")
     t_wup = time.perf_counter()
     algorithms.warmup(n_obs=N_OBS, eps=float(EPS_GRID[2]))
-    print(f"  Done in {time.perf_counter() - t_wup:.1f} s\n")
+    print(f"Done in {time.perf_counter() - t_wup:.1f} s\n")
 
-    # ── Main loop ────────────────────────────────────────────────────────────
     for r in range(R):
         key_bench, k_data = jax.random.split(key_bench)
-        y_obs = np.asarray(
-            algorithms.generate_dataset(k_data, n=N_OBS)
-        )
+        y_obs = np.asarray(algorithms.generate_dataset(k_data, n=N_OBS))
 
         print(
-            f"─── Rep {r + 1}/{R}  "
-            f"(mean={y_obs.mean():.2f}, std={y_obs.std():.2f}) ───"
+            f"Rep {r + 1}/{R}: "
+            f"mean={y_obs.mean():.2f}, std={y_obs.std():.2f}"
         )
 
         for i_eps, eps in enumerate(EPS_GRID):
             seed_base = r * 1000 + i_eps * 10
 
-            # ── Reject-ABC ──────────────────────────────────────────────────
             try:
                 t0 = time.perf_counter()
                 mu_r, s2_r, rate_r, ess_r = algorithms.reject_abc(
@@ -119,7 +107,7 @@ def run_benchmark() -> pd.DataFrame:
                 mean_s2_r = float(s2_r.mean())
 
             except Exception as exc:
-                print(f"    [Reject-ABC ε={eps:.1f}] ERROR: {exc}")
+                print(f"    [Reject-ABC eps={eps:.1f}] ERROR: {exc}")
                 rt_r = mean_mu_r = mean_s2_r = rate_r = ess_r = float("nan")
 
             records.append(dict(
@@ -134,7 +122,6 @@ def run_benchmark() -> pd.DataFrame:
                 ess_per_sec=ess_r / rt_r if rt_r > 0 else float("nan"),
             ))
 
-            # ── MCMC-ABC ────────────────────────────────────────────────────
             try:
                 t0 = time.perf_counter()
                 mu_m, s2_m, rate_m, ess_m = algorithms.mcmc_abc(
@@ -150,7 +137,7 @@ def run_benchmark() -> pd.DataFrame:
                 mean_s2_m = float(s2_m.mean())
 
             except Exception as exc:
-                print(f"    [MCMC-ABC ε={eps:.1f}] ERROR: {exc}")
+                print(f"    [MCMC-ABC eps={eps:.1f}] ERROR: {exc}")
                 rt_m = mean_mu_m = mean_s2_m = rate_m = ess_m = float("nan")
 
             records.append(dict(
@@ -169,7 +156,7 @@ def run_benchmark() -> pd.DataFrame:
             mcmc_ess_per_sec = ess_m / rt_m if rt_m > 0 else float("nan")
 
             print(
-                f"  ε={eps:.1f} | "
+                f"  eps={eps:.1f} | "
                 f"Rej : {rt_r:6.1f}s  acc={rate_r:.3f}  "
                 f"ESS={ess_r:5.0f}  ESS/s={rej_ess_per_sec:5.1f} | "
                 f"MCMC: {rt_m:6.1f}s  acc={rate_m:.3f}  "
@@ -181,23 +168,19 @@ def run_benchmark() -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Plots — 6-panel comparison figure
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def make_plots(df: pd.DataFrame) -> None:
     plt.rcParams.update({
-        "font.family":       "DejaVu Sans",
-        "font.size":         11,
-        "axes.titlesize":    12,
-        "axes.titleweight":  "bold",
-        "axes.labelsize":    11,
-        "axes.spines.top":   False,
+        "font.family": "DejaVu Sans",
+        "font.size": 11,
+        "axes.titlesize": 12,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 11,
+        "axes.spines.top": False,
         "axes.spines.right": False,
-        "legend.fontsize":   9,
+        "legend.fontsize": 9,
         "legend.framealpha": 0.9,
-        "xtick.labelsize":   10,
-        "ytick.labelsize":   10,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
     })
 
     grp = df.groupby(["method", "epsilon"])
@@ -225,23 +208,22 @@ def make_plots(df: pd.DataFrame) -> None:
 
     eps = Rm.epsilon.values
 
-    # Bigger figure to avoid overlap
-    fig, axes = plt.subplots(
-        2,
-        3,
-        figsize=(19, 11),
-        constrained_layout=False,
-    )
-
+    fig = plt.figure(figsize=(19, 11), constrained_layout=False)
     fig.patch.set_facecolor("#F8F9FA")
 
-    for ax in axes.flat:
-        ax.set_facecolor("#FFFFFF")
-        ax.set_xticks(eps)
+    gs = gridspec.GridSpec(2, 6, figure=fig)
+    ax_a = fig.add_subplot(gs[0, 0:2])
+    ax_b = fig.add_subplot(gs[0, 2:4])
+    ax_d = fig.add_subplot(gs[0, 4:6])
+    ax_e = fig.add_subplot(gs[1, 1:3])
+    ax_f = fig.add_subplot(gs[1, 3:5])
 
-    # Main title and subtitle
+    for ax in [ax_a, ax_b, ax_d, ax_e, ax_f]:
+        ax.set_facecolor("#FFFFFF")
+        ax.set_xticks(list(eps))
+
     fig.suptitle(
-        "Reject-ABC  vs  MCMC-ABC  —  Benchmark comparison",
+        "Reject-ABC vs MCMC-ABC benchmark",
         fontsize=16,
         fontweight="bold",
         color="#2C3E50",
@@ -251,9 +233,9 @@ def make_plots(df: pd.DataFrame) -> None:
     fig.text(
         0.5,
         0.945,
-        r"$Y_i = \sum_\ell e^{X_{i\ell}}$,  "
-        r"truth: $\mu_0=0,\ \sigma_0^2=0.09$,  $n=1000,\ L=10$"
-        f"  |  mean ± 1 std over {R} reps",
+        r"$Y_i = \sum_\ell e^{X_{i\ell}}$, "
+        r"truth: $\mu_0=0,\ \sigma_0^2=0.09$, $n=1000,\ L=10$"
+        f" | mean +/- 1 std over {R} reps",
         ha="center",
         fontsize=10,
         color="#555",
@@ -284,26 +266,23 @@ def make_plots(df: pd.DataFrame) -> None:
             zorder=2,
         )
 
-    # ── (a) Runtime ───────────────────────────────────────────────────────────
-    ax = axes[0, 0]
+    ax = ax_a
 
-    _band(ax, eps, "runtime_s", Rm, Rs, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "runtime_s", Rm, Rs, C_R, "o", "-", "Reject-ABC")
     _band(ax, eps, "runtime_s", Mm, Ms, C_M, "s", "--", "MCMC-ABC")
 
     ax.set_yscale("log")
 
-    # Add padding so annotations do not touch the top border
     ymin = min(Rm["runtime_s"].min(), Mm["runtime_s"].min())
     ymax = max(Rm["runtime_s"].max(), Mm["runtime_s"].max())
     ax.set_ylim(ymin * 0.75, ymax * 1.45)
 
-    ax.set_xlabel("Tolerance  ε")
-    ax.set_ylabel("Wall-clock time (s)  [log scale]")
-    ax.set_title("(a)  Runtime vs ε", pad=10)
+    ax.set_xlabel("Tolerance epsilon")
+    ax.set_ylabel("Wall-clock time (s), log scale")
+    ax.set_title("(a) Runtime vs epsilon", pad=10)
     ax.legend(loc="upper right")
     ax.grid(True, which="both", alpha=0.2, linestyle="--")
 
-    # Annotate runtime values
     for xi, yi, yj in zip(eps, Rm["runtime_s"].values, Mm["runtime_s"].values):
         ax.annotate(
             f"{yi:.1f}s",
@@ -325,8 +304,7 @@ def make_plots(df: pd.DataFrame) -> None:
             ha="center",
         )
 
-    # ── (b) Speedup ratio ─────────────────────────────────────────────────────
-    ax = axes[0, 1]
+    ax = ax_b
 
     ratio = Rm["runtime_s"].values / Mm["runtime_s"].values
     colors_bar = [C_R if v > 1 else C_M for v in ratio]
@@ -348,19 +326,16 @@ def make_plots(df: pd.DataFrame) -> None:
         lw=1.6,
         ls="--",
         zorder=4,
-        label="Equal speed  (ratio = 1)",
+        label="Equal speed",
     )
 
     for bar, v in zip(bars, ratio):
-        if v >= 1:
-            ypos = v + 0.15
-        else:
-            ypos = v + 0.08
+        ypos = v + 0.15 if v >= 1 else v + 0.08
 
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             ypos,
-            f"{v:.1f}×",
+            f"{v:.1f}x",
             ha="center",
             va="bottom",
             fontsize=9.5,
@@ -384,41 +359,16 @@ def make_plots(df: pd.DataFrame) -> None:
         alpha=0.05,
     )
 
-    ax.set_xlabel("Tolerance  ε")
+    ax.set_xlabel("Tolerance epsilon")
     ax.set_ylabel("Reject runtime / MCMC runtime")
-    ax.set_title("(b)  Speedup ratio  (Reject ÷ MCMC)", pad=10)
+    ax.set_title("(b) Speedup ratio", pad=10)
     ax.legend(loc="upper right", fontsize=9)
     ax.grid(True, axis="y", alpha=0.2, linestyle="--")
     ax.set_ylim(0, max(ratio) * 1.45)
 
-    # ── (c) ESS / second ──────────────────────────────────────────────────────
-    ax = axes[0, 2]
+    ax = ax_d
 
-    _band(ax, eps, "ess_per_sec", Rm, Rs, C_R, "o", "-",  "Reject-ABC")
-    _band(ax, eps, "ess_per_sec", Mm, Ms, C_M, "s", "--", "MCMC-ABC")
-
-    ax.set_xlabel("Tolerance  ε")
-    ax.set_ylabel("ESS / second")
-    ax.set_title("(c)  Efficiency: ESS / second  vs ε", pad=10)
-    ax.legend(loc="upper left")
-    ax.grid(True, alpha=0.2, linestyle="--")
-
-    ax.text(
-        0.97,
-        0.97,
-        "Higher = more independent\nsamples per unit time",
-        transform=ax.transAxes,
-        fontsize=8,
-        color="#555",
-        ha="right",
-        va="top",
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
-    )
-
-    # ── (d) Posterior mean μ ──────────────────────────────────────────────────
-    ax = axes[1, 0]
-
-    _band(ax, eps, "mean_mu", Rm, Rs, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "mean_mu", Rm, Rs, C_R, "o", "-", "Reject-ABC")
     _band(ax, eps, "mean_mu", Mm, Ms, C_M, "s", "--", "MCMC-ABC")
 
     ax.axhline(
@@ -426,19 +376,18 @@ def make_plots(df: pd.DataFrame) -> None:
         color="#2C3E50",
         lw=1.8,
         ls=":",
-        label=f"Truth  μ₀ = {algorithms.TRUE_MU}",
+        label=f"Truth mu0 = {algorithms.TRUE_MU}",
     )
 
-    ax.set_xlabel("Tolerance  ε")
-    ax.set_ylabel("Posterior mean  E[μ | y*]")
-    ax.set_title("(d)  Posterior mean  μ  vs ε", pad=10)
+    ax.set_xlabel("Tolerance epsilon")
+    ax.set_ylabel("Posterior mean of mu")
+    ax.set_title("(d) Posterior mean of mu", pad=10)
     ax.legend(loc="lower left")
     ax.grid(True, alpha=0.2, linestyle="--")
 
-    # ── (e) Posterior mean σ² ─────────────────────────────────────────────────
-    ax = axes[1, 1]
+    ax = ax_e
 
-    _band(ax, eps, "mean_sigma2", Rm, Rs, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "mean_sigma2", Rm, Rs, C_R, "o", "-", "Reject-ABC")
     _band(ax, eps, "mean_sigma2", Mm, Ms, C_M, "s", "--", "MCMC-ABC")
 
     ax.axhline(
@@ -446,39 +395,37 @@ def make_plots(df: pd.DataFrame) -> None:
         color="#2C3E50",
         lw=1.8,
         ls=":",
-        label=f"Truth  σ₀² = {algorithms.TRUE_SIGMA2:.2f}",
+        label=f"Truth sigma0^2 = {algorithms.TRUE_SIGMA2:.2f}",
     )
 
-    ax.set_xlabel("Tolerance  ε")
-    ax.set_ylabel("Posterior mean  E[σ² | y*]")
-    ax.set_title("(e)  Posterior mean  σ²  vs ε", pad=10)
+    ax.set_xlabel("Tolerance epsilon")
+    ax.set_ylabel("Posterior mean of sigma2")
+    ax.set_title("(e) Posterior mean of sigma2", pad=10)
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.2, linestyle="--")
 
-    # ── (f) Acceptance rate ───────────────────────────────────────────────────
-    ax = axes[1, 2]
+    ax = ax_f
 
-    _band(ax, eps, "acc_rate", Rm, Rs, C_R, "o", "-",  "Reject-ABC")
+    _band(ax, eps, "acc_rate", Rm, Rs, C_R, "o", "-", "Reject-ABC")
     _band(ax, eps, "acc_rate", Mm, Ms, C_M, "s", "--", "MCMC-ABC")
 
     ax.yaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{x:.1%}")
     )
 
-    ax.set_xlabel("Tolerance  ε")
+    ax.set_xlabel("Tolerance epsilon")
     ax.set_ylabel("Acceptance rate")
-    ax.set_title("(f)  Acceptance rate  vs ε", pad=10)
+    ax.set_title("(f) Acceptance rate", pad=10)
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.2, linestyle="--")
 
-    # Manual spacing. This is the key layout fix.
     fig.subplots_adjust(
-        left=0.06,
-        right=0.985,
-        bottom=0.08,
-        top=0.89,
-        wspace=0.25,
-        hspace=0.34,
+        left=0.08,
+        right=0.97,
+        bottom=0.06,
+        top=0.91,
+        wspace=0.28,
+        hspace=0.38,
     )
 
     path = "benchmark_results/benchmark2_plots.png"
@@ -492,21 +439,16 @@ def make_plots(df: pd.DataFrame) -> None:
     plt.close(fig)
     plt.rcParams.update(plt.rcParamsDefault)
 
-    print(f"Plots saved  →  {path}")
+    print(f"Plots saved -> {path}")
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Entry point
-# ═══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
     df = run_benchmark()
 
     csv_path = "benchmark_results/benchmark_results.csv"
     df.to_csv(csv_path, index=False)
-    print(f"Results saved  →  {csv_path}\n")
+    print(f"Results saved -> {csv_path}\n")
 
-    # Summary table
     agg = (
         df.groupby(["method", "epsilon"])
         .mean(numeric_only=True)[[
@@ -528,7 +470,7 @@ def main() -> None:
     agg["ess"] = agg["ess"].map("{:.0f}".format)
     agg["ess_per_sec"] = agg["ess_per_sec"].map("{:.1f}".format)
 
-    print("Summary (mean over reps):")
+    print("Summary, mean over reps:")
     print(agg.to_string(index=False))
     print()
 
